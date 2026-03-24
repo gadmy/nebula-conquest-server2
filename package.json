@@ -1,0 +1,15 @@
+{
+  "name": "nebula-conquest-server2",
+  "version": "2.0.0",
+  "description": "Nebula Conquest multiplayer server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.2"
+  }
+}
