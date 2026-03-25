@@ -1,9 +1,9 @@
 // roomManager.js — Nebula Conquest Server v2
 // Gère les rooms MULTI (matchmaking 4 joueurs) et LOCAL (invitations par pseudo)
 
-const MULTI_MAX_PLAYERS = 4;
+const MULTI_MAX_PLAYERS = 2;
 const LOCAL_MIN_PLAYERS = 2;
-const LOCAL_MAX_PLAYERS = 4;
+const LOCAL_MAX_PLAYERS = 2;
 
 class RoomManager {
   constructor() {
