@@ -32,11 +32,12 @@ const roomManager = new RoomManager();
 const tournamentManager = new TournamentManager();
 
 io.on('connection', (socket) => {
-  const profile = {
+const profile = {
     pseudo: socket.handshake.auth?.pseudo || 'Joueur',
     color:  socket.handshake.auth?.color  || '#C084FC',
     userId: socket.handshake.auth?.userId || null
   };
+  pseudoToSocket.set(profile.pseudo, socket.id);
 
   console.log(`[+] ${profile.pseudo} (${socket.id})`);
 
