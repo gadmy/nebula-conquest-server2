@@ -38,7 +38,7 @@ const profile = {
     color:  socket.handshake.auth?.color  || '#C084FC',
     userId: socket.handshake.auth?.userId || null
   };
-  pseudoToSocket.set(profile.pseudo, socket.id);
+  pseudoToSocket.set(profile.pseudo.toLowerCase(), socket.id);
 
   console.log(`[+] ${profile.pseudo} (${socket.id})`);
 
