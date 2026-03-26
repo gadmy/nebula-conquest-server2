@@ -116,8 +116,10 @@ socket.on('game_start', ({ roomId, universe }) => {
     if (targetSocketId) io.to(targetSocketId).emit('invite_declined', { fromPseudo: profile.pseudo });
   });
 
-  socket.on('player_ready', ({ roomId }) => {
-    socket.to(roomId).emit('player_ready');
+socket.on('player_ready', ({ roomId }) => {
+    const room = roomManager._getRoom(roomId);
+    const players = room ? room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) : [];
+    socket.to(roomId).emit('player_ready', { players });
   });
 
   socket.on('register_pseudo', ({ pseudo }) => {
