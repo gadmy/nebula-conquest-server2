@@ -115,6 +115,10 @@ const profile = {
     if (targetSocketId) io.to(targetSocketId).emit('invite_declined', { fromPseudo: profile.pseudo });
   });
 
+  socket.on('register_pseudo', ({ pseudo }) => {
+    if (pseudo) pseudoToSocket.set(pseudo.toLowerCase(), socket.id);
+  });
+
   socket.on('local_invite', ({ roomId, targetPseudo }) => {
     const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
     if (!targetSocketId) { socket.emit('invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
