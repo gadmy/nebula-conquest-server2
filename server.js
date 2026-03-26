@@ -115,6 +115,10 @@ const profile = {
     if (targetSocketId) io.to(targetSocketId).emit('invite_declined', { fromPseudo: profile.pseudo });
   });
 
+  socket.on('player_ready', ({ roomId }) => {
+    socket.to(roomId).emit('player_ready');
+  });
+
   socket.on('register_pseudo', ({ pseudo }) => {
     if (pseudo) pseudoToSocket.set(pseudo.toLowerCase(), socket.id);
   });
