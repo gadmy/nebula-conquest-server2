@@ -85,9 +85,10 @@ const profile = {
   });
 
   // EN JEU
-  socket.on('game_start', ({ roomId, universe }) => {
+socket.on('game_start', ({ roomId, universe }) => {
     const room = roomManager.startGame(roomId, universe);
     if (!room) { socket.emit('error', { msg: 'Room introuvable' }); return; }
+    console.log(`[game_start] room=${roomId} slots=${room.slots.length} universe=${!!universe}`);
     io.to(roomId).emit('game_start', { roomId, universe, players: room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) });
   });
 
