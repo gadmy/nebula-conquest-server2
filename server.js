@@ -110,6 +110,11 @@ const profile = {
   });
 
   // DÉCONNEXION
+  socket.on('invite_declined', ({ targetPseudo }) => {
+    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
+    if (targetSocketId) io.to(targetSocketId).emit('invite_declined', { fromPseudo: profile.pseudo });
+  });
+
   socket.on('local_invite', ({ roomId, targetPseudo }) => {
     const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
     if (!targetSocketId) { socket.emit('invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
