@@ -30,6 +30,7 @@ const io = new Server(server, {
 
 const roomManager = new RoomManager();
 const tournamentManager = new TournamentManager();
+const pseudoToSocket = new Map();
 
 io.on('connection', (socket) => {
 const profile = {
@@ -109,10 +110,17 @@ const profile = {
   });
 
   // DÉCONNEXION
+  socket.on('local_invite', ({ roomId, targetPseudo }) => {
+    const targetSocketId = pseudoToSocket.get(targetPseudo);
+    if (!targetSocketId) { socket.emit('invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
+    io.to(targetSocketId).emit('invite_received', { roomId, fromPseudo: profile.pseudo });
+  });
+
   socket.on('disconnect', () => {
     console.log(`[-] ${profile.pseudo} (${socket.id})`);
     const tResult = tournamentManager.handleDisconnect(socket.id);
     if (tResult) io.to('tournament').emit('tournament_update', tournamentManager.getState());
+    pseudoToSocket.delete(profile.pseudo);
     const result = roomManager.handleDisconnect(socket.id);
     if (result?.room) socket.to(result.room.id).emit('player_disconnected', { slot: result.slotEntry?.slot, pseudo: profile.pseudo });
   });
