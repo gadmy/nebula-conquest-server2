@@ -110,14 +110,18 @@ function _buildState(universe) {
         }
     }
 
-    return {
+return {
         suns:          universe?.suns          || [],
         planets,
         moons,
         allBodies,
         asteroidBelts: universe?.asteroidBelts || [],
+        blackHole:     universe?.blackHole     || { x: 0, y: 0, radius: 300, dangerZone: 300, gravityRange: 1500, gravityStrength: 1260 },
         jets:          [],
         players:       universe?.players       || [],
+        config:        universe?.config        || { difficulty: 'normal' },
+        jetRatio:      universe?.jetRatio      || 0.5,
+        universeRadius: universe?.universeRadius || 6000,
         time:          0,
         _gameRng:      mulberry32(seed + 5555),
         _worldRng:     mulberry32(seed),
