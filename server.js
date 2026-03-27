@@ -100,10 +100,11 @@ socket.on('game_start', ({ roomId, universe }) => {
     }
   });
 
-  socket.on('player_action', (data) => {
+socket.on('player_action', (data) => {
     const roomId = roomManager.socketToRoom.get(socket.id);
     if (!roomId) return;
-    socket.to(roomId).emit('player_action', { ...data, fromSocketId: socket.id });
+    const loop = gameLoops.get(roomId);
+    if (loop) loop.handleInput(socket.id, data);
   });
 
   socket.on('game_snapshot', (snapshot) => {
