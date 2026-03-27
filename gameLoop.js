@@ -35,8 +35,43 @@ class GameLoop {
         console.log(`[GameLoop] room=${this.roomId} arrêtée`);
     }
 
-    // Input joueur reçu (sera développé étape 3)
-    handleInput(socketId, ev) { /* TODO */ }
+handleInput(socketId, ev) {
+        if (!this.state || !ev?.type) return;
+        const state = this.state;
+
+        if (ev.type === 'jet') {
+            const src = state.planets.find(p => p.name === ev.srcName)
+                     || state.moons.find(m => m.name === ev.srcName);
+            if (!src) return;
+            launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
+        }
+
+        if (ev.type === 'spawn') {
+            const body   = state.planets.find(p => p.name === ev.bodyName)
+                        || state.moons.find(m => m.name === ev.bodyName);
+            const slot   = ev.fromSlot !== undefined ? ev.fromSlot : ev.slot;
+            const player = state.players[slot];
+            if (body && player) {
+                body.owner  = slot;
+                body.spores = body.maxSpores * 0.5;
+                player.bodies = [body];
+                player.spawnPlanet = body;
+            }
+        }
+
+        if (ev.type === 'set_sacrifice') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) player.multiSacrifice = ev.value;
+        }
+
+        if (ev.type === 'build_mode') {
+            const body = state.planets.find(p => p.name === ev.bodyName)
+                      || state.moons.find(m => m.name === ev.bodyName);
+            if (body && body.owner === state.players.findIndex(p => p.socketId === socketId)) {
+                body.buildMode = ev.mode || 'off';
+            }
+        }
+    }
 
     _step(dt) {
         if (!this.state) return;
