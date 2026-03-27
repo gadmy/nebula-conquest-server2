@@ -39,11 +39,13 @@ handleInput(socketId, ev) {
         if (!this.state || !ev?.type) return;
         const state = this.state;
 
-        if (ev.type === 'jet') {
+if (ev.type === 'jet') {
             const src = state.planets.find(p => p.name === ev.srcName)
                      || state.moons.find(m => m.name === ev.srcName);
+            console.log(`[handleInput jet] srcName=${ev.srcName} src=${!!src} dirX=${ev.dirX?.toFixed(2)} owner=${src?.owner} spores=${src?.spores}`);
             if (!src) return;
             launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
+            console.log(`[handleInput jet] jets total=${state.jets.length}`);
         }
 
 if (ev.type === 'spawn') {
