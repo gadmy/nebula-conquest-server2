@@ -46,16 +46,18 @@ handleInput(socketId, ev) {
             launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
         }
 
-        if (ev.type === 'spawn') {
+if (ev.type === 'spawn') {
             const body   = state.planets.find(p => p.name === ev.bodyName)
                         || state.moons.find(m => m.name === ev.bodyName);
             const slot   = ev.fromSlot !== undefined ? ev.fromSlot : ev.slot;
             const player = state.players[slot];
+            console.log(`[handleInput spawn] bodyName=${ev.bodyName} slot=${slot} body=${!!body} player=${!!player} planets=${state.planets.length}`);
             if (body && player) {
                 body.owner  = slot;
                 body.spores = body.maxSpores * 0.5;
                 player.bodies = [body];
                 player.spawnPlanet = body;
+                console.log(`[handleInput spawn] OK — ${body.name} owner=${body.owner}`);
             }
         }
 
