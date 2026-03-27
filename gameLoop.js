@@ -112,12 +112,18 @@ function _buildState(universe) {
         }
     }
 
-return {
-        suns:          universe?.suns          || [],
+const suns = universe?.suns || [];
+    const asteroidBelts = (universe?.asteroidBelts || []).map(b => ({
+        ...b,
+        sun: suns[b.sunIndex] || suns[0] || null,
+    }));
+
+    return {
+        suns,
         planets,
         moons,
         allBodies,
-        asteroidBelts: universe?.asteroidBelts || [],
+        asteroidBelts,
         blackHole:     universe?.blackHole     || { x: 0, y: 0, radius: 300, dangerZone: 300, gravityRange: 1500, gravityStrength: 1260 },
         jets:          [],
         players:       universe?.players       || [],
