@@ -28,7 +28,9 @@ const io = new Server(server, {
   cors: { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
 });
 
+const GameLoop = require('./gameLoop').GameLoop;
 const roomManager = new RoomManager();
+const gameLoops = new Map(); // roomId → GameLoop
 const tournamentManager = new TournamentManager();
 const pseudoToSocket = new Map();
 
@@ -90,6 +92,12 @@ socket.on('game_start', ({ roomId, universe }) => {
     if (!room) { socket.emit('error', { msg: 'Room introuvable' }); return; }
     console.log(`[game_start] room=${roomId} slots=${room.slots.length} universe=${!!universe}`);
     io.to(roomId).emit('game_start', { roomId, universe, players: room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) });
+    // Démarrer la simulation autoritaire
+    if (!gameLoops.has(roomId)) {
+      const loop = new GameLoop(roomId, io);
+      loop.start(universe);
+      gameLoops.set(roomId, loop);
+    }
   });
 
   socket.on('player_action', (data) => {
@@ -137,8 +145,15 @@ socket.on('player_ready', ({ roomId }) => {
     const tResult = tournamentManager.handleDisconnect(socket.id);
     if (tResult) io.to('tournament').emit('tournament_update', tournamentManager.getState());
     pseudoToSocket.delete(profile.pseudo.toLowerCase());
-    const result = roomManager.handleDisconnect(socket.id);
-    if (result?.room) socket.to(result.room.id).emit('player_disconnected', { slot: result.slotEntry?.slot, pseudo: profile.pseudo });
+const result = roomManager.handleDisconnect(socket.id);
+    if (result?.room) {
+      socket.to(result.room.id).emit('player_disconnected', { slot: result.slotEntry?.slot, pseudo: profile.pseudo });
+      // Stopper le GameLoop si la room est vide
+      if (!result.room.slots.length) {
+        const loop = gameLoops.get(result.room.id);
+        if (loop) { loop.stop(); gameLoops.delete(result.room.id); }
+      }
+    }
   });
 });
 
