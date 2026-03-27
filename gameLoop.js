@@ -44,7 +44,8 @@ class GameLoop {
         updateOrbits(this.state, dt);
         updateSporeGeneration(this.state, dt);
         updateJets(this.state, dt);
-        // TODO étapes suivantes : updateComets, updateAI
+        updateComets(this.state, dt);
+        // TODO : updateAI
 
         // Snapshot toutes les 2 ticks = 100ms
         if (this._tick % 2 === 0) {
@@ -355,6 +356,54 @@ function applyConquest(state, body, jet) {
     }
 }
 
+// ─── Constantes simulation ────────────────────────────────────
+const COMET_CFG = { freq: 8, speed: 150, size: 8, tail: 80 };
+
+// ─── updateComets (portée du client, UI neutralisée) ──────────
+function updateComets(state, dt) {
+    if (!state.comets) state.comets = [];
+    if (state.cometTimer === undefined) state.cometTimer = COMET_CFG.freq;
+
+    state.cometTimer -= dt;
+    if (state.cometTimer <= 0) {
+        state.cometTimer = COMET_CFG.freq * (0.7 + state._gameRng() * 0.6);
+        const range      = (state.universeRadius || 6000) * 2;
+        const angle      = state._gameRng() * Math.PI * 2;
+        const startDist  = range * 0.8;
+        const cx         = Math.cos(angle) * startDist;
+        const cy         = Math.sin(angle) * startDist;
+        const targetAngle = angle + Math.PI + (state._gameRng() - 0.5) * 1.2;
+        const spd        = COMET_CFG.speed + state._gameRng() * COMET_CFG.speed * 0.5;
+        state.comets.push({
+            x: cx, y: cy,
+            vx: Math.cos(targetAngle) * spd,
+            vy: Math.sin(targetAngle) * spd,
+            size: COMET_CFG.size * (0.6 + state._gameRng() * 0.8),
+            tail: COMET_CFG.tail * (0.7 + state._gameRng() * 0.6),
+            life: range * 2 / spd,
+            age:  0,
+        });
+    }
+
+    for (let i = state.comets.length - 1; i >= 0; i--) {
+        const c = state.comets[i];
+        c.age += dt;
+        c.x   += c.vx * dt;
+        c.y   += c.vy * dt;
+        if (c.age >= c.life) { state.comets.splice(i, 1); continue; }
+
+        for (const body of state.allBodies) {
+            const dx = body.x - c.x;
+            const dy = body.y - c.y;
+            if (Math.sqrt(dx * dx + dy * dy) < body.radius + c.size) {
+                if (!body.invincible) body.spores = 0;
+                state.comets.splice(i, 1);
+                break;
+            }
+        }
+    }
+}
+
 // ─── updateJets (portée du client, UI neutralisée) ────────────
 function updateJets(state, dt) {
     const jets = state.jets;
@@ -461,5 +510,264 @@ function updateJets(state, dt) {
         }
     }
 }
+// ─── Tech ────────────────────────────────────────────────────
+function getTechCost(player, branch) {
+    const tech = player.tech; const lvl = tech[branch];
+    if (lvl >= 10) return Infinity;
+    let order = tech._branchOrder.indexOf(branch);
+    if (order === -1) order = tech._branchOrder.length;
+    const baseCost      = [1000, 2000, 3000][Math.min(order, 2)];
+    const increment     = [100,  200,  300 ][Math.min(order, 2)];
+    return baseCost + lvl * increment;
+}
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, _buildState };
+function buyTech(player, branch) {
+    const cost = getTechCost(player, branch);
+    if (player.totalSpores < cost || player.tech[branch] >= 10) return false;
+    let toDeduct = cost;
+    const bodies = player.bodies.slice().sort((a, b) => b.spores - a.spores);
+    for (const body of bodies) {
+        const take = Math.min(body.spores, toDeduct);
+        body.spores  -= take;
+        toDeduct     -= take;
+        if (toDeduct <= 0) break;
+    }
+    if (toDeduct > 0) return false;
+    if (player.tech[branch] === 0 && !player.tech._branchOrder.includes(branch))
+        player.tech._branchOrder.push(branch);
+    player.tech[branch]++;
+    return true;
+}
+
+// ─── Trajectoire (portée du client) ──────────────────────────
+function computeTrajectory(state, startX, startY, dirX, dirY, speed) {
+    const bh     = state.blackHole;
+    const points = [];
+    let x = startX, y = startY;
+    let vx = dirX * speed, vy = dirY * speed;
+    const dt = 0.4;
+    const steps = 200;
+
+    for (let i = 0; i < steps; i++) {
+        const dx   = bh.x - x, dy = bh.y - y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < (bh.dangerZone || 300) * 0.4) break;
+
+        const gRange = bh.gravityRange || 1500;
+        if (dist < gRange) {
+            const G        = bh.gravityStrength || 500;
+            const edgeFade = 1 - Math.pow(dist / gRange, 2);
+            const factor   = (G / (dist + 50)) * edgeFade * dt;
+            vx += (dx / dist) * factor;
+            vy += (dy / dist) * factor;
+        }
+
+        for (const sun of state.suns) {
+            const sdx   = sun.x - x, sdy = sun.y - y;
+            const sdist = Math.sqrt(sdx * sdx + sdy * sdy);
+            const sRange = sun.radius * 8;
+            if (sdist < sRange && sdist > sun.radius + 5) {
+                const sG       = sun.radius * 2;
+                const sEdge    = 1 - Math.pow(sdist / sRange, 2);
+                const sGravity = sG / (sdist + 30) * sEdge;
+                vx += (sdx / sdist) * sGravity * dt;
+                vy += (sdy / sdist) * sGravity * dt;
+            }
+        }
+
+        x += vx * dt;
+        y += vy * dt;
+        points.push({ x, y });
+    }
+    return points;
+}
+
+// ─── launchJet (version serveur, sans sons ni sparkles) ───────
+let _jetIdCounter = 0;
+function launchJet(state, source, dirX, dirY, sporeType) {
+    sporeType = sporeType || 'normal';
+    const player = state.players[source.owner];
+    if (!player) return;
+
+    let sporeCount;
+    if (sporeType === 'parasite') {
+        if ((source.parasiteSpore || 0) < 1) return;
+        source.parasiteSpore = 0;
+        sporeCount = 1;
+    } else if (sporeType === 'attaque') {
+        sporeCount = Math.floor((source.sporesAttaque || 0) * (state.jetRatio || 0.5));
+        if (sporeCount < 5) return;
+        source.sporesAttaque -= sporeCount;
+    } else if (sporeType === 'defense') {
+        sporeCount = Math.floor((source.sporesDefense || 0) * (state.jetRatio || 0.5));
+        if (sporeCount < 5) return;
+        source.sporesDefense -= sporeCount;
+    } else {
+        sporeCount = Math.floor(source.spores * (state.jetRatio || 0.5));
+        if (sporeCount < 5) return;
+        source.spores -= sporeCount;
+    }
+
+    const speed = 20 + player.stats.velocity * 6;
+    const traj  = computeTrajectory(state, source.x, source.y, dirX, dirY, speed);
+    const jetColor = sporeType === 'attaque' ? '#EF4444'
+                   : sporeType === 'defense' ? '#38BDF8'
+                   : sporeType === 'parasite' ? '#22C55E'
+                   : player.color;
+
+    state.jets.push({
+        id:         ++_jetIdCounter,
+        owner:      source.owner,
+        color:      jetColor,
+        spores:     sporeCount,
+        sporeType:  sporeType,
+        trajectory: traj,
+        posIndex:   0,
+        x:          source.x,
+        y:          source.y,
+        speed,
+        alive:      true,
+        trail:      [],
+        age:        0,
+        source,
+        _hitBelt:   {},
+    });
+}
+
+// ─── updateAI (portée du client) ─────────────────────────────
+function updateAI(state, dt) {
+    const difficulty = state.config?.difficulty || 'normal';
+
+    for (const player of state.players) {
+        if (player.isHuman || !player.alive) continue;
+        if (!player.bodies || player.bodies.length === 0) continue;
+
+        if (player.multiSacrifice === 0 && player.multiTier < 10) {
+            player.multiSacrifice = 15 + Math.floor(state._gameRng() * 20);
+        }
+        if (player.totalSpores > 2000 && state._gameRng() < 0.03) {
+            const _br = ['homing', 'tenacity', 'mimicry'][Math.floor(state._gameRng() * 3)];
+            if (player.tech[_br] < 10) buyTech(player, _br);
+        }
+
+        for (const body of player.bodies) {
+            if (body.buildMode === 'off' && body.spores > body.maxSpores * 0.7) {
+                body.buildMode = player.bodies.length < 4 ? 'nid' : (state._gameRng() > 0.5 ? 'nid' : 'biome');
+            }
+        }
+
+        player.aiTimer -= dt;
+        if (player.aiTimer > 0) continue;
+        player.aiTimer = player.aiCooldown + state._gameRng() * player.aiCooldown * 0.5;
+
+        if (difficulty === 'easy')        aiActionEasy(state, player);
+        else if (difficulty === 'normal') aiActionNormal(state, player);
+        else                              aiActionBrutal(state, player);
+    }
+}
+
+function aiActionEasy(state, player) {
+    const sources = player.bodies.filter(b => b.spores > 20);
+    if (!sources.length) return;
+    const source  = sources[Math.floor(state._gameRng() * sources.length)];
+    const targets = state.allBodies.filter(b => b.owner !== player.id && b.type !== 'sun');
+    if (!targets.length) return;
+    const target  = targets[Math.floor(state._gameRng() * targets.length)];
+    aiLaunchAt(state, source, target, player);
+}
+
+function aiActionNormal(state, player) {
+    const sources = player.bodies.filter(b => b.spores > 30);
+    if (!sources.length) return;
+    const targets = state.allBodies.filter(b => b.owner !== player.id && b.type !== 'sun');
+    if (!targets.length) return;
+
+    let bestTarget = null, bestScore = -Infinity;
+    for (const target of targets) {
+        let minDist = Infinity;
+        for (const src of sources) {
+            const dx = target.x - src.x, dy = target.y - src.y;
+            minDist  = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
+        }
+        const score = (target.flore || 0) * 2 - (target.faune || 0) - minDist * 0.05 + (target.owner === null ? 50 : 0);
+        if (score > bestScore) { bestScore = score; bestTarget = target; }
+    }
+    if (!bestTarget) return;
+
+    let bestSource = sources[0], bestDist = Infinity;
+    for (const src of sources) {
+        const dx = bestTarget.x - src.x, dy = bestTarget.y - src.y;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        if (d < bestDist) { bestDist = d; bestSource = src; }
+    }
+    aiLaunchAt(state, bestSource, bestTarget, player);
+}
+
+function aiActionBrutal(state, player) {
+    const sources = player.bodies.filter(b => b.spores > 25);
+    if (!sources.length) return;
+    const targets = state.allBodies.filter(b => b.owner !== player.id && b.type !== 'sun');
+    if (!targets.length) return;
+
+    let bestTarget = null, bestScore = -Infinity;
+    for (const target of targets) {
+        let minDist = Infinity;
+        for (const src of sources) {
+            const dx = target.x - src.x, dy = target.y - src.y;
+            minDist  = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
+        }
+        const humanBonus = (target.owner !== null && state.players[target.owner]?.isHuman) ? 60 : 0;
+        const score = (target.flore || 0) * 3 - (target.faune || 0) * 0.5 - minDist * 0.03
+                    + (target.owner === null ? 40 : 20) - (target.spores || 0) * 0.3 + humanBonus;
+        if (score > bestScore) { bestScore = score; bestTarget = target; }
+    }
+    if (!bestTarget) return;
+
+    const attackSources = sources
+        .map(src => {
+            const dx = bestTarget.x - src.x, dy = bestTarget.y - src.y;
+            return { src, dist: Math.sqrt(dx * dx + dy * dy) };
+        })
+        .filter(e => e.dist < 1500)
+        .sort((a, b) => a.dist - b.dist);
+
+    const count = Math.min(attackSources.length, 1 + Math.floor(state._gameRng() * 3));
+    for (let i = 0; i < count; i++) {
+        if (attackSources[i].src.spores < 40) continue;
+        aiLaunchAt(state, attackSources[i].src, bestTarget, player);
+    }
+}
+
+function aiLaunchAt(state, source, target, player) {
+    const dx   = target.x - source.x, dy = target.y - source.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const speed      = 20 + player.stats.velocity * 6;
+    const travelTime = dist / speed * 0.4;
+    const difficulty = state.config?.difficulty || 'normal';
+
+    let futureX = target.x, futureY = target.y;
+    if (difficulty !== 'easy' && target.parent) {
+        const futureAngle = target.angle + target.orbitSpeed * travelTime;
+        futureX = target.parent.x + Math.cos(futureAngle) * target.orbitRadius;
+        futureY = target.parent.y + Math.sin(futureAngle) * target.orbitRadius;
+
+        if (difficulty === 'brutal' && target.parent.parent) {
+            const pfa = target.parent.angle + target.parent.orbitSpeed * travelTime;
+            const pfx = target.parent.parent.x + Math.cos(pfa) * target.parent.orbitRadius;
+            const pfy = target.parent.parent.y + Math.sin(pfa) * target.parent.orbitRadius;
+            futureX   = pfx + Math.cos(futureAngle) * target.orbitRadius;
+            futureY   = pfy + Math.sin(futureAngle) * target.orbitRadius;
+        } else if (difficulty === 'brutal' && target.parent.orbitRadius) {
+            const sfa = target.parent.angle + target.parent.orbitSpeed * travelTime;
+            futureX   = Math.cos(sfa) * target.parent.orbitRadius + Math.cos(futureAngle) * target.orbitRadius;
+            futureY   = Math.sin(sfa) * target.parent.orbitRadius + Math.sin(futureAngle) * target.orbitRadius;
+        }
+    }
+
+    const aimDx = futureX - source.x, aimDy = futureY - source.y;
+    const aimLen = Math.sqrt(aimDx * aimDx + aimDy * aimDy);
+    if (aimLen < 5) return;
+    launchJet(state, source, aimDx / aimLen, aimDy / aimLen);
+}
+
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState };
