@@ -51,7 +51,7 @@ if (ev.type === 'spawn') {
                         || state.moons.find(m => m.name === ev.bodyName);
             const slot   = ev.fromSlot !== undefined ? ev.fromSlot : ev.slot;
             const player = state.players[slot];
-            console.log(`[handleInput spawn] bodyName=${ev.bodyName} slot=${slot} body=${!!body} player=${!!player} planets=${state.planets.length}`);
+console.log(`[handleInput spawn] bodyName=${ev.bodyName} slot=${slot} body=${!!body} player=${!!player} planets=${state.planets.length} players=${JSON.stringify(state.players.map(p=>({id:p.id,name:p.name})))}`);
             if (body && player) {
                 body.owner  = slot;
                 body.spores = body.maxSpores * 0.5;
