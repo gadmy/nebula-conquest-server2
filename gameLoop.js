@@ -505,12 +505,13 @@ function updateJets(state, dt) {
             }
         }
 
-        // Traversée amas de météorites
+// Traversée amas de météorites
         if (!jet._hitBelt) jet._hitBelt = {};
         for (let bi = 0; bi < state.asteroidBelts.length; bi++) {
             if (jet._hitBelt[bi]) continue;
             const belt = state.asteroidBelts[bi];
-            const sun  = belt.sun;
+            const sun  = belt.sun || state.suns[belt.sunIndex] || null;
+            if (!sun) continue;
             let closestDist = Infinity;
             let closestType = null;
             for (const rock of belt.rocks) {
