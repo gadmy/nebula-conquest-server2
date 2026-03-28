@@ -547,8 +547,9 @@ function updateJets(state, dt) {
             }
         }
 
-        // Collision avec les corps
+// Collision avec les corps (ignorer la source pendant les 0.5 premières secondes)
         for (const body of state.allBodies) {
+            if (body === jet.source && jet.age < 0.5) continue;
             const dx   = jet.x - body.x;
             const dy   = jet.y - body.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
