@@ -568,7 +568,11 @@ function updateJets(state, dt) {
 
     for (let i = jets.length - 1; i >= 0; i--) {
         const jet = jets[i];
-        if (!jet.alive) { jets.splice(i, 1); continue; }
+        if (!jet.alive) {
+            jet._deadTick = (jet._deadTick || 0) + 1;
+            if (jet._deadTick > 2) jets.splice(i, 1);
+            continue;
+        }
 
         jet.age += dt;
 
