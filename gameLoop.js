@@ -444,7 +444,7 @@ function applyConquest(state, body, jet) {
 
 // ─── Constantes simulation ────────────────────────────────────
 const COMET_CFG = { freq: 8, speed: 150, size: 8, tail: 80 };
-const CLN_CFG = { speedMin: 67, speedMax: 120, turnInterval: 15, detectRange: 350, fireRate: 0.3, dmgMin: 34, dmgMax: 106 };
+const CLN_CFG = { speedMin: 67, speedMax: 120, turnInterval: 15, detectRange: 120, fireRate: 0.3, dmgMin: 34, dmgMax: 106 };
 
 // ─── updateCleaners (portée du client, UI neutralisée) ────────
 function updateCleaners(state, dt) {
