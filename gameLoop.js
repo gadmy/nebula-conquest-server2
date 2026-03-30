@@ -173,6 +173,14 @@ function _buildSnapshot(state) {
             spores: Math.round(m.spores || 0),
         })),
 jets: [], // jets animés localement côté client
+        time: state.time,
+        orbits: state.suns.map(s => ({
+            a: Math.round(s.angle * 10000) / 10000,
+            planets: s.planets.map(p => ({
+                a: Math.round(p.angle * 10000) / 10000,
+                moons: p.moons.map(m => ({ a: Math.round(m.angle * 10000) / 10000 }))
+            }))
+        })),
         players: state.players.map(p => ({
             id:          p.id,
             alive:       p.alive,
