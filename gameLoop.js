@@ -109,9 +109,14 @@ if (ev.type === 'spawn') {
         updateCleaners(this.state, dt);
         if (this._tick % 2 === 0) updateAI(this.state, 50 / 1000);
 
-        // Snapshot toutes les 2 ticks = 100ms
+     // Snapshot toutes les 2 ticks = 100ms
         if (this._tick % 2 === 0) {
             this.io.to(this.roomId).emit('game_snapshot', _buildSnapshot(this.state));
+        }
+
+        // Vérification fin de partie toutes les 20 ticks = 1s
+        if (this._tick % 20 === 0 && !this.state._gameOver) {
+            _checkVictory(this.state, this.io, this.roomId);
         }
     }
 }
@@ -963,6 +968,78 @@ function aiLaunchAt(state, source, target, player) {
     const aimLen = Math.sqrt(aimDx * aimDx + aimDy * aimDy);
     if (aimLen < 5) return;
     launchJet(state, source, aimDx / aimLen, aimDy / aimLen);
+}
+
+// ─── Détection fin de partie (autoritaire serveur) ────────────
+function _checkVictory(state, io, roomId) {
+    const totalBodies = state.planets.length + state.moons.length;
+    if (totalBodies === 0) return;
+
+    // Timer 10 minutes → victoire au score
+    if (state.time >= 600) {
+        const alive = state.players.filter(p => p.alive);
+        if (alive.length >= 2) {
+            const best = alive.reduce((a, b) => b.bodies.length > a.bodies.length ? b : a);
+            state._gameOver = true;
+            io.to(roomId).emit('game_over', {
+                winnerSlot: best.id,
+                reason: 'time',
+                stats: { timeElapsed: state.time }
+            });
+            return;
+        }
+    }
+
+    for (const player of state.players) {
+        if (!player.alive) continue;
+
+        // Élimination
+        if (player.bodies.length === 0) {
+            const hasJets = state.jets.some(j => j.alive && j.owner === player.id);
+            if (!hasJets) {
+                player.alive = false;
+                player._inSursis = false;
+                io.to(roomId).emit('player_eliminated', { slot: player.id, pseudo: player.name });
+            } else if (!player._inSursis) {
+                player._inSursis = true;
+            }
+        } else {
+            player._inSursis = false;
+        }
+    }
+
+    // Victoire : 80% des astres OU un seul joueur vivant
+    const alivePlayers = state.players.filter(p => p.alive);
+    if (alivePlayers.length === 0) return;
+
+    if (alivePlayers.length === 1) {
+        state._gameOver = true;
+        io.to(roomId).emit('game_over', {
+            winnerSlot: alivePlayers[0].id,
+            reason: 'last_standing',
+            stats: { timeElapsed: state.time }
+        });
+        return;
+    }
+
+    for (const player of alivePlayers) {
+        const teamCount = state.config?.teamCount || 0;
+        let owned = player.bodies.length;
+        if (teamCount >= 2 && player.team !== undefined) {
+            owned = state.players
+                .filter(p => p.team === player.team)
+                .reduce((sum, p) => sum + p.bodies.length, 0);
+        }
+        if (owned / totalBodies >= 0.8) {
+            state._gameOver = true;
+            io.to(roomId).emit('game_over', {
+                winnerSlot: player.id,
+                reason: 'domination',
+                stats: { timeElapsed: state.time }
+            });
+            return;
+        }
+    }
 }
 
 module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState };
