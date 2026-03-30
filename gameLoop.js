@@ -423,6 +423,81 @@ function applyConquest(state, body, jet) {
 
 // ─── Constantes simulation ────────────────────────────────────
 const COMET_CFG = { freq: 8, speed: 150, size: 8, tail: 80 };
+const CLN_CFG = { speedMin: 67, speedMax: 120, turnInterval: 15, detectRange: 200, fireRate: 1.5, dmgMin: 34, dmgMax: 106 };
+
+// ─── updateCleaners (portée du client, UI neutralisée) ────────
+function updateCleaners(state, dt) {
+    if (!state.cleaners || !state.cleaners.length) return;
+    const bh = state.blackHole;
+
+    for (const cl of state.cleaners) {
+        cl.turnTimer -= dt;
+        if (cl.turnTimer <= 0) {
+            cl.turnTimer = CLN_CFG.turnInterval + state._gameRng() * 5;
+            const speed = CLN_CFG.speedMin + state._gameRng() * (CLN_CFG.speedMax - CLN_CFG.speedMin);
+            if (state._gameRng() < 0.7 && state.planets.length > 0) {
+                const target = state.planets[Math.floor(state._gameRng() * state.planets.length)];
+                cl._target = target;
+                const tdx = target.x - cl.x, tdy = target.y - cl.y;
+                const tDist = Math.sqrt(tdx * tdx + tdy * tdy);
+                if (tDist > 0) { cl.vx = (tdx / tDist) * speed; cl.vy = (tdy / tDist) * speed; }
+            } else {
+                cl._target = null;
+                const wanderAngle = Math.atan2(cl.y, cl.x) + (state._gameRng() - 0.5) * 1.5;
+                cl.vx = Math.cos(wanderAngle) * speed * 0.5;
+                cl.vy = Math.sin(wanderAngle) * speed * 0.5;
+            }
+        }
+
+        if (cl._target) {
+            const tdx = cl._target.x - cl.x, tdy = cl._target.y - cl.y;
+            const tDist = Math.sqrt(tdx * tdx + tdy * tdy);
+            if (tDist < 80) { cl.turnTimer = 0; }
+            else if (tDist > 0) {
+                const currentSpeed = Math.sqrt(cl.vx * cl.vx + cl.vy * cl.vy);
+                cl.vx += (tdx / tDist) * 15 * dt;
+                cl.vy += (tdy / tDist) * 15 * dt;
+                const newSpeed = Math.sqrt(cl.vx * cl.vx + cl.vy * cl.vy);
+                if (newSpeed > currentSpeed * 1.2) { cl.vx = (cl.vx / newSpeed) * currentSpeed; cl.vy = (cl.vy / newSpeed) * currentSpeed; }
+            }
+        }
+
+        cl.x += cl.vx * dt;
+        cl.y += cl.vy * dt;
+        cl.angle = Math.atan2(cl.vy, cl.vx);
+
+        // Repousser du trou noir
+        const bhDx = cl.x - bh.x, bhDy = cl.y - bh.y;
+        const bhDist = Math.sqrt(bhDx * bhDx + bhDy * bhDy);
+        if (bhDist < bh.dangerZone * 2) { cl.vx += (bhDx / bhDist) * 30 * dt; cl.vy += (bhDy / bhDist) * 30 * dt; }
+
+        // Garder dans la zone de jeu
+        const maxRange = state.universeRadius || 6000;
+        const distFromCenter = Math.sqrt(cl.x * cl.x + cl.y * cl.y);
+        if (distFromCenter > maxRange) { cl.vx -= cl.x * 0.02; cl.vy -= cl.y * 0.02; }
+
+        // Tirer sur les jets
+        cl.fireTimer -= dt;
+        if (cl.fireTimer <= 0) {
+            cl.fireTimer = CLN_CFG.fireRate;
+            for (const jet of state.jets) {
+                if (!jet.alive) continue;
+                const dx = jet.x - cl.x, dy = jet.y - cl.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < CLN_CFG.detectRange) {
+                    if (cl.type === 'red') {
+                        const damage = CLN_CFG.dmgMin + state._gameRng() * (CLN_CFG.dmgMax - CLN_CFG.dmgMin);
+                        jet.spores -= damage;
+                        if (jet.spores <= 0) jet.alive = false;
+                    } else if (cl.type === 'green') {
+                        if (!jet._boosted) { jet.spores = Math.floor(jet.spores * 2); jet._boosted = true; }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
 
 // ─── updateComets (portée du client, UI neutralisée) ──────────
 function updateComets(state, dt) {
