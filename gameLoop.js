@@ -42,10 +42,8 @@ handleInput(socketId, ev) {
 if (ev.type === 'jet') {
             const src = state.planets.find(p => p.name === ev.srcName)
                      || state.moons.find(m => m.name === ev.srcName);
-            console.log(`[handleInput jet] srcName=${ev.srcName} src=${!!src} dirX=${ev.dirX?.toFixed(2)} owner=${src?.owner} spores=${src?.spores}`);
             if (!src) return;
             launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
-            console.log(`[handleInput jet] jets total=${state.jets.length}`);
         }
 
 if (ev.type === 'spawn') {
@@ -53,13 +51,11 @@ if (ev.type === 'spawn') {
                         || state.moons.find(m => m.name === ev.bodyName);
             const slot   = ev.fromSlot !== undefined ? ev.fromSlot : ev.slot;
             const player = state.players[slot];
-console.log(`[handleInput spawn] bodyName=${ev.bodyName} slot=${slot} body=${!!body} player=${!!player} planets=${state.planets.length} players=${JSON.stringify(state.players.map(p=>({id:p.id,name:p.name})))}`);
-            if (body && player) {
+    if (body && player) {
                 body.owner  = slot;
                 body.spores = body.maxSpores * 0.5;
                 player.bodies = [body];
                 player.spawnPlanet = body;
-                console.log(`[handleInput spawn] OK — ${body.name} owner=${body.owner}`);
             }
         }
 
