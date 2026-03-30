@@ -82,6 +82,14 @@ if (ev.type === 'spawn') {
             if (player) player.multiSacrifice = ev.value;
         }
 
+        if (ev.type === 'spawn_done') {
+            const slot = ev.slot !== undefined ? ev.slot : state.players.findIndex(p => p.socketId === socketId);
+            if (slot >= 0 && state.players[slot]) state.players[slot]._spawnDone = true;
+            const humanPlayers = state.players.filter(p => p.isHuman);
+            const allDone = humanPlayers.every(p => p._spawnDone);
+            if (allDone) this.io.to(this.roomId).emit('all_spawned');
+        }
+
         if (ev.type === 'build_mode') {
             const body = state.planets.find(p => p.name === ev.bodyName)
                       || state.moons.find(m => m.name === ev.bodyName);
