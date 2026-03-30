@@ -148,11 +148,43 @@ socket.on('player_ready', ({ roomId }) => {
     pseudoToSocket.delete(profile.pseudo.toLowerCase());
 const result = roomManager.handleDisconnect(socket.id);
     if (result?.room) {
-      socket.to(result.room.id).emit('player_disconnected', { slot: result.slotEntry?.slot, pseudo: profile.pseudo });
+      const roomId = result.room.id;
+      const slot = result.slotEntry?.slot;
+      socket.to(roomId).emit('player_disconnected', { slot, pseudo: profile.pseudo });
+
+      const loop = gameLoops.get(roomId);
+
       // Stopper le GameLoop si la room est vide
       if (!result.room.slots.length) {
-        const loop = gameLoops.get(result.room.id);
-        if (loop) { loop.stop(); gameLoops.delete(result.room.id); }
+        if (loop) { loop.stop(); gameLoops.delete(roomId); }
+      } else if (loop && loop.state && !loop.state._gameOver) {
+        // Marquer le joueur déconnecté comme mort dans la simulation
+        const p = loop.state.players.find(p => p.id === slot);
+        if (p) { p.alive = false; p.bodies = []; }
+
+        // Compter les joueurs humains encore connectés
+        const humanSlots = result.room.slots.map(s => s.slot);
+        const alivePlayers = loop.state.players.filter(p => p.alive);
+        const aliveHumans = alivePlayers.filter(p => humanSlots.includes(p.id));
+
+        if (aliveHumans.length === 1 && alivePlayers.length >= 1) {
+          // Un seul humain reste → vainqueur
+          loop.state._gameOver = true;
+          io.to(roomId).emit('game_over', {
+            winnerSlot: aliveHumans[0].id,
+            reason: 'disconnect',
+            stats: { timeElapsed: loop.state.time }
+          });
+        } else if (aliveHumans.length === 0) {
+          // Match nul (tous déconnectés simultanément)
+          loop.state._gameOver = true;
+          io.to(roomId).emit('game_over', {
+            winnerSlot: -1,
+            reason: 'draw',
+            stats: { timeElapsed: loop.state.time }
+          });
+        }
+        // Sinon la partie continue normalement
       }
     }
   });
