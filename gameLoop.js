@@ -494,11 +494,11 @@ function updateCleaners(state, dt) {
         const maxRange = state.universeRadius || 6000;
         const distFromCenter = Math.sqrt(cl.x * cl.x + cl.y * cl.y);
         if (distFromCenter > maxRange) { cl.vx -= cl.x * 0.02; cl.vy -= cl.y * 0.02; }
-
         // Tirer sur les jets
         cl.fireTimer -= dt;
         if (cl.fireTimer <= 0) {
             cl.fireTimer = CLN_CFG.fireRate;
+            if (state.jets.length > 0) console.log(`[cleaner] ${cl.type} check ${state.jets.length} jets`);
             for (const jet of state.jets) {
                 if (!jet.alive) continue;
                 const dx = jet.x - cl.x, dy = jet.y - cl.y;
