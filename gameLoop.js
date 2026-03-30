@@ -34,16 +34,31 @@ class GameLoop {
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
         console.log(`[GameLoop] room=${this.roomId} arrêtée`);
     }
-
 handleInput(socketId, ev) {
         if (!this.state || !ev?.type) return;
         const state = this.state;
 
-if (ev.type === 'jet') {
+        if (ev.type === 'jet') {
             const src = state.planets.find(p => p.name === ev.srcName)
                      || state.moons.find(m => m.name === ev.srcName);
             if (!src) return;
+            const prevCount = state.jets.length;
             launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
+            // Notifier tous les clients pour qu'ils animent le jet localement
+            if (state.jets.length > prevCount) {
+                const jet = state.jets[state.jets.length - 1];
+                this.io.to(this.roomId).emit('jet_fired', {
+                    srcName:   ev.srcName,
+                    dirX:      ev.dirX,
+                    dirY:      ev.dirY,
+                    sporeType: ev.sporeType || 'normal',
+                    owner:     src.owner,
+                    spores:    jet.spores,
+                    color:     jet.color,
+                    speed:     jet.speed,
+                    id:        jet.id,
+                });
+            }
         }
 
 if (ev.type === 'spawn') {
@@ -157,15 +172,7 @@ function _buildSnapshot(state) {
             owner:  m.owner,
             spores: Math.round(m.spores || 0),
         })),
-        jets: state.jets.map(j => ({
-            id:     j.id,
-            x:      Math.round(j.x),
-            y:      Math.round(j.y),
-            alive:  j.alive,
-            owner:  j.owner,
-            spores: Math.round(j.spores || 0),
-            color:  j.color,
-        })),
+jets: [], // jets animés localement côté client
         players: state.players.map(p => ({
             id:          p.id,
             alive:       p.alive,
