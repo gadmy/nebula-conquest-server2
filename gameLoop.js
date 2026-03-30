@@ -557,8 +557,10 @@ function updateJets(state, dt) {
             const dy   = jet.y - body.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist < body.radius + 6) {
+                console.log(`[conquest] jet ${jet.id} touche ${body.name} owner=${body.owner} jet.owner=${jet.owner} spores=${Math.round(jet.spores)}`);
                 jet.alive = false;
                 applyConquest(state, body, jet);
+                console.log(`[conquest] après: ${body.name} owner=${body.owner}`);
                 break;
             }
         }
