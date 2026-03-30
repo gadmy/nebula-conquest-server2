@@ -178,11 +178,12 @@ function _buildSnapshot(state) {
             owner:  m.owner,
             spores: Math.round(m.spores || 0),
         })),
-jets: state.jets.map(j => ({
-            id:    j.id,
-            x:     Math.round(j.x),
-            y:     Math.round(j.y),
-            alive: j.alive,
+        jets: state.jets.map(j => ({
+            id:     j.id,
+            x:      Math.round(j.x),
+            y:      Math.round(j.y),
+            alive:  j.alive,
+            spores: Math.round(j.spores || 0),
         })),
         cleaners: state.cleaners.map(c => ({
             type:  c.type,
