@@ -47,16 +47,17 @@ handleInput(socketId, ev) {
             // Notifier tous les clients pour qu'ils animent le jet localement
             if (state.jets.length > prevCount) {
                 const jet = state.jets[state.jets.length - 1];
-                this.io.to(this.roomId).emit('jet_fired', {
-                    srcName:   ev.srcName,
-                    dirX:      ev.dirX,
-                    dirY:      ev.dirY,
-                    sporeType: ev.sporeType || 'normal',
-                    owner:     src.owner,
-                    spores:    jet.spores,
-                    color:     jet.color,
-                    speed:     jet.speed,
-                    id:        jet.id,
+this.io.to(this.roomId).emit('jet_fired', {
+                    srcName:    ev.srcName,
+                    dirX:       ev.dirX,
+                    dirY:       ev.dirY,
+                    sporeType:  ev.sporeType || 'normal',
+                    owner:      src.owner,
+                    spores:     jet.spores,
+                    color:      jet.color,
+                    speed:      jet.speed,
+                    id:         jet.id,
+                    trajectory: jet.trajectory,
                 });
             }
         }
