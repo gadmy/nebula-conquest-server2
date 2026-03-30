@@ -510,11 +510,26 @@ function updateCleaners(state, dt) {
                         jet.spores -= damage;
                         if (jet.spores <= 0) jet.alive = false;
                         if (state._io && state._roomId) state._io.to(state._roomId).emit('cleaner_hit', { type: 'red', x: jet.x, y: jet.y, damage: Math.round(damage) });
-                    } else if (cl.type === 'green') {
+                     } else if (cl.type === 'green') {
                         if (!jet._boosted) {
                             jet.spores = Math.floor(jet.spores * 2);
                             jet._boosted = true;
                             if (state._io && state._roomId) state._io.to(state._roomId).emit('cleaner_hit', { type: 'green', x: jet.x, y: jet.y });
+                        }
+                    } else if (cl.type === 'dark') {
+                        if (!jet._darkHit) {
+                            jet._darkHit = true;
+                            // Inverser la trajectoire vers la source
+                            const src = state.allBodies.find(b => b.name === jet.sourceName);
+                            if (src) {
+                                const rdx = src.x - jet.x, rdy = src.y - jet.y;
+                                const rDist = Math.sqrt(rdx * rdx + rdy * rdy);
+                                if (rDist > 0) {
+                                    jet._targetBody = src;
+                                    jet._parasiteDrain = true;
+                                }
+                            }
+                            if (state._io && state._roomId) state._io.to(state._roomId).emit('cleaner_hit', { type: 'dark', x: jet.x, y: jet.y });
                         }
                     }
                     break;
