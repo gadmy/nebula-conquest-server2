@@ -188,6 +188,8 @@ jets: state.jets.map(j => ({
             type:  c.type,
             x:     Math.round(c.x),
             y:     Math.round(c.y),
+            vx:    Math.round(c.vx * 100) / 100,
+            vy:    Math.round(c.vy * 100) / 100,
             angle: c.angle,
         })),
 time: state.time,
