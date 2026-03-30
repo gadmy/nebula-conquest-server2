@@ -96,6 +96,7 @@ if (ev.type === 'spawn') {
         updateSporeGeneration(this.state, dt);
         updateJets(this.state, dt);
         updateComets(this.state, dt);
+        updateCleaners(this.state, dt);
         if (this._tick % 2 === 0) updateAI(this.state, 50 / 1000);
 
         // Snapshot toutes les 2 ticks = 100ms
