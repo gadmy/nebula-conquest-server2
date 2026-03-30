@@ -132,21 +132,25 @@ const suns = universe?.suns || [];
         sun: suns[b.sunIndex] || suns[0] || null,
     }));
 
+// Initialiser les cleaners depuis l'universe
+    const cleaners = (universe?.cleaners || []).map(c => ({ ...c, _target: null, fireTimer: CLN_CFG.fireRate, turnTimer: 0 }));
+
     return {
         suns,
         planets,
         moons,
         allBodies,
         asteroidBelts,
-        blackHole:     universe?.blackHole     || { x: 0, y: 0, radius: 300, dangerZone: 300, gravityRange: 1500, gravityStrength: 1260 },
-        jets:          [],
-        players:       universe?.players       || [],
-        config:        universe?.config        || { difficulty: 'normal' },
-        jetRatio:      universe?.jetRatio      || 0.5,
+        blackHole:      universe?.blackHole     || { x: 0, y: 0, radius: 300, dangerZone: 300, gravityRange: 1500, gravityStrength: 1260 },
+        jets:           [],
+        cleaners,
+        players:        universe?.players       || [],
+        config:         universe?.config        || { difficulty: 'normal' },
+        jetRatio:       universe?.jetRatio      || 0.5,
         universeRadius: universe?.universeRadius || 6000,
-        time:          0,
-        _gameRng:      mulberry32(seed + 5555),
-        _worldRng:     mulberry32(seed),
+        time:           0,
+        _gameRng:       mulberry32(seed + 5555),
+        _worldRng:      mulberry32(seed),
     };
 }
 
