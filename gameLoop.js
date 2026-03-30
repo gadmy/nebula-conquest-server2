@@ -23,8 +23,10 @@ class GameLoop {
     }
 
     // Appelé depuis server.js au game_start
-    start(universe) {
+start(universe) {
         this.state = _buildState(universe);
+        this.state._io     = this.io;
+        this.state._roomId = this.roomId;
         const DT = 50 / 1000;
         this._timer = setInterval(() => this._step(DT), 50);
         console.log(`[GameLoop] room=${this.roomId} démarrée`);
@@ -507,8 +509,13 @@ function updateCleaners(state, dt) {
                         const damage = CLN_CFG.dmgMin + state._gameRng() * (CLN_CFG.dmgMax - CLN_CFG.dmgMin);
                         jet.spores -= damage;
                         if (jet.spores <= 0) jet.alive = false;
+                        if (state._io && state._roomId) state._io.to(state._roomId).emit('cleaner_hit', { type: 'red', x: jet.x, y: jet.y, damage: Math.round(damage) });
                     } else if (cl.type === 'green') {
-                        if (!jet._boosted) { jet.spores = Math.floor(jet.spores * 2); jet._boosted = true; }
+                        if (!jet._boosted) {
+                            jet.spores = Math.floor(jet.spores * 2);
+                            jet._boosted = true;
+                            if (state._io && state._roomId) state._io.to(state._roomId).emit('cleaner_hit', { type: 'green', x: jet.x, y: jet.y });
+                        }
                     }
                     break;
                 }
