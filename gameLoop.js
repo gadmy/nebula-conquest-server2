@@ -498,11 +498,11 @@ function updateCleaners(state, dt) {
         cl.fireTimer -= dt;
         if (cl.fireTimer <= 0) {
             cl.fireTimer = CLN_CFG.fireRate;
-            if (state.jets.length > 0) console.log(`[cleaner] ${cl.type} check ${state.jets.length} jets`);
             for (const jet of state.jets) {
                 if (!jet.alive) continue;
                 const dx = jet.x - cl.x, dy = jet.y - cl.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
+                console.log(`[cleaner] ${cl.type} jet=${jet.id} dist=${Math.round(dist)} range=${CLN_CFG.detectRange}`);
                 if (dist < CLN_CFG.detectRange) {
                     if (cl.type === 'red') {
                         const damage = CLN_CFG.dmgMin + state._gameRng() * (CLN_CFG.dmgMax - CLN_CFG.dmgMin);
