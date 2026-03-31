@@ -366,14 +366,15 @@ function updateSporeGeneration(state, dt) {
                     body.spores -= _drain;
                     body.buildProgress = (body.buildProgress || 0) + _drain;
                 }
-                if ((body.buildProgress || 0) >= _buildCost) {
+                    if ((body.buildProgress || 0) >= _buildCost) {
                     body.buildProgress = 0;
                     body.buildMode = 'off';
-                    if (_buildType === 'nid')          body.nids     = (body.nids     || 0) + 1;
-                    else if (_buildType === 'alveole') { body.alveoles = (body.alveoles || 0) + 1; body.baseMaxSpores = body.baseMaxSpores || body.maxSpores; }
-                    else                               body.biomes   = (body.biomes   || 0) + 1;
-                    // invalidate cache système
+                    let _evIcon = '', _evMsg = '';
+                    if (_buildType === 'nid')          { body.nids     = (body.nids     || 0) + 1; _evIcon='🏗️'; _evMsg=`Nid construit sur ${body.name} (×${body.nids})`; }
+                    else if (_buildType === 'alveole') { body.alveoles = (body.alveoles || 0) + 1; body.baseMaxSpores = body.baseMaxSpores || body.maxSpores; _evIcon='🍯'; _evMsg=`Alvéole construite sur ${body.name} (×${body.alveoles})`; }
+                    else                               { body.biomes   = (body.biomes   || 0) + 1; _evIcon='🛡️'; _evMsg=`Biome construit sur ${body.name} (×${body.biomes})`; }
                     if (bodySun) bodySun._sysCache = null;
+                    if (state._io && state._roomId) state._io.to(state._roomId).emit('build_complete', { slot: body.owner, icon: _evIcon, msg: _evMsg, bodyName: body.name });
                 }
             }
         } else if (body.buildMode === 'parasite') {
