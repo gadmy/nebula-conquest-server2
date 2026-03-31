@@ -89,7 +89,7 @@ if (ev.type === 'spawn') {
             const allDone = humanPlayers.every(p => p._spawnDone);
             if (allDone) this.io.to(this.roomId).emit('all_spawned');
         }
-            if (ev.type === 'multi') {
+if (ev.type === 'multi') {
             const player = state.players.find(p => p.socketId === socketId);
             if (!player) return;
             const stat = ev.stat;
@@ -97,6 +97,7 @@ if (ev.type === 'spawn') {
                 player.stats[stat] = (player.stats[stat] || 0) + 1;
                 player.multiTier = (player.multiTier || 0) + 1;
                 player.multiProgress = 0;
+                player._multiPendingTier = false;
             }
         }
 
