@@ -223,6 +223,8 @@ planets: state.planets.map(p => ({
             buildMode:        p.buildMode || 'off',
             parasiteSpore:    p.parasiteSpore || 0,
             parasiteProgress: Math.round((p.parasiteProgress || 0) * 10) / 10,
+            baseMaxSpores:    p.baseMaxSpores || p.maxSpores,
+            maxSpores:        Math.round(p.maxSpores || 0),
         })),
         moons: state.moons.map(m => ({
             name:   m.name,
