@@ -89,7 +89,18 @@ if (ev.type === 'spawn') {
             const allDone = humanPlayers.every(p => p._spawnDone);
             if (allDone) this.io.to(this.roomId).emit('all_spawned');
         }
-if (ev.type === 'nidification') {
+            if (ev.type === 'multi') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player) return;
+            const stat = ev.stat;
+            if (['growth', 'velocity', 'density'].includes(stat)) {
+                player.stats[stat] = (player.stats[stat] || 0) + 1;
+                player.multiTier = (player.multiTier || 0) + 1;
+                player.multiProgress = 0;
+            }
+        }
+
+        if (ev.type === 'nidification') {
             const motherBody = state.planets.find(p => p.name === ev.bodyName)
                             || state.moons.find(m => m.name === ev.bodyName);
             if (!motherBody || motherBody._nidCooldown > 0) return;
@@ -238,10 +249,13 @@ time: state.time,
             a: Math.round((b.rocks[0]?.angle || 0) * 10000) / 10000,
             orbitSpeed: b.orbitSpeed,
         })),
-        players: state.players.map(p => ({
-            id:          p.id,
-            alive:       p.alive,
-            totalSpores: Math.round(p.totalSpores || 0),
+players: state.players.map(p => ({
+            id:           p.id,
+            alive:        p.alive,
+            totalSpores:  Math.round(p.totalSpores || 0),
+            multiProgress: Math.round(p.multiProgress || 0),
+            multiTier:    p.multiTier || 0,
+            stats:        p.stats,
         })),
     };
 }
