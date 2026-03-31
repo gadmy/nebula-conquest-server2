@@ -400,7 +400,7 @@ function updateSporeGeneration(state, dt) {
             // Multiplicité
             if (totalSac > 0 && player.multiTier < 10 && !player._multiPendingTier) {
                 player.multiProgress = (player.multiProgress || 0) + rate * totalSac * dt;
-                const tierCost = 100 * Math.pow(1.8, player.multiTier || 0);
+                const tierCost = (player.multiTier + 1) * 100;
                 if (player.multiProgress >= tierCost) {
                     player.multiProgress = 0;
                     player._multiPendingTier = true;
