@@ -102,6 +102,7 @@ if (ev.type === 'spawn') {
     _step(dt) {
         if (!this.state) return;
         this._tick++;
+        this.state.time += dt;
         updateOrbits(this.state, dt);
         updateSporeGeneration(this.state, dt);
         updateJets(this.state, dt);
