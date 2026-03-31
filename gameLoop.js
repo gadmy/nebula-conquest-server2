@@ -89,6 +89,23 @@ if (ev.type === 'spawn') {
             const allDone = humanPlayers.every(p => p._spawnDone);
             if (allDone) this.io.to(this.roomId).emit('all_spawned');
         }
+if (ev.type === 'nidification') {
+            const motherBody = state.planets.find(p => p.name === ev.bodyName)
+                            || state.moons.find(m => m.name === ev.bodyName);
+            if (!motherBody || motherBody._nidCooldown > 0) return;
+            const player = state.players[motherBody.owner];
+            if (!player) return;
+            const allBodies = [...state.planets, ...state.moons]
+                .filter(b => b.owner === player.id && b !== motherBody);
+            let gathered = 0;
+            for (const b of allBodies) {
+                const take = Math.floor(b.spores * 0.5);
+                b.spores -= take;
+                gathered += take;
+            }
+            motherBody.spores = Math.min(motherBody.maxSpores, motherBody.spores + gathered);
+            motherBody._nidCooldown = 180;
+        }
 
         if (ev.type === 'build_mode') {
             const body = state.planets.find(p => p.name === ev.bodyName)
