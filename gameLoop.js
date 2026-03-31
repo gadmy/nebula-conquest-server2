@@ -125,7 +125,6 @@ if (['growth', 'velocity', 'density'].includes(stat)) {
             const body = state.planets.find(p => p.name === ev.bodyName)
                       || state.moons.find(m => m.name === ev.bodyName);
             const player = state.players.find(p => p.socketId === socketId);
-            console.log(`[build_mode] bodyName=${ev.bodyName} mode=${ev.mode} socketId=${socketId} player=${player?.id} bodyOwner=${body?.owner}`);
             if (body && player && body.owner === player.id) {
                 body.buildMode = ev.mode || 'off';
                 body.buildProgress = 0;
