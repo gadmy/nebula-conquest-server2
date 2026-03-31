@@ -115,8 +115,8 @@ if (ev.type === 'spawn') {
             this.io.to(this.roomId).emit('game_snapshot', _buildSnapshot(this.state));
         }
 
-        // Vérification fin de partie toutes les 20 ticks = 1s
-        if (this._tick % 20 === 0 && !this.state._gameOver) {
+     // Vérification fin de partie toutes les 20 ticks = 1s (pas avant 30s)
+        if (this._tick % 20 === 0 && !this.state._gameOver && this.state.time >= 30) {
             _checkVictory(this.state, this.io, this.roomId);
         }
     }
