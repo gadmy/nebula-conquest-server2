@@ -118,11 +118,13 @@ if (ev.type === 'spawn') {
             motherBody._nidCooldown = 180;
         }
 
-        if (ev.type === 'build_mode') {
+            if (ev.type === 'build_mode') {
             const body = state.planets.find(p => p.name === ev.bodyName)
                       || state.moons.find(m => m.name === ev.bodyName);
-            if (body && body.owner === state.players.findIndex(p => p.socketId === socketId)) {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (body && player && body.owner === player.id) {
                 body.buildMode = ev.mode || 'off';
+                body.buildProgress = 0;
             }
         }
     }
