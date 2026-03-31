@@ -88,6 +88,7 @@ const profile = {
 
   // EN JEU
 socket.on('game_start', ({ roomId, universe }) => {
+socket.on('game_start', ({ roomId, universe }) => {
     const room = roomManager.startGame(roomId, universe);
     if (!room) { socket.emit('error', { msg: 'Room introuvable' }); return; }
     console.log(`[game_start] room=${roomId} slots=${room.slots.length} universe=${!!universe}`);
@@ -96,6 +97,11 @@ socket.on('game_start', ({ roomId, universe }) => {
     if (!gameLoops.has(roomId)) {
       const loop = new GameLoop(roomId, io);
       loop.start(universe);
+      // Associer socketId → slot sur chaque player
+      for (const s of room.slots) {
+        const p = loop.state.players.find(p => p.id === s.slot);
+        if (p) p.socketId = s.socketId;
+      }
       gameLoops.set(roomId, loop);
     }
   });
