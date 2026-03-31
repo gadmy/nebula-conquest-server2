@@ -162,8 +162,9 @@ const result = roomManager.handleDisconnect(socket.id);
         const p = loop.state.players.find(p => p.id === slot);
         if (p) { p.alive = false; p.bodies = []; }
 
-        // Joueurs humains encore vivants (hors celui qui vient de partir)
+       // Joueurs humains encore vivants (hors celui qui vient de partir)
         const aliveHumans = loop.state.players.filter(p => p.isHuman && p.alive);
+        console.log(`[disconnect] slot=${slot} aliveHumans=${aliveHumans.length}`, loop.state.players.map(p => `id=${p.id} isHuman=${p.isHuman} alive=${p.alive}`));
 
         if (aliveHumans.length === 1) {
           // Un seul humain reste → vainqueur
