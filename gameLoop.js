@@ -93,8 +93,10 @@ if (ev.type === 'multi') {
             const player = state.players.find(p => p.socketId === socketId);
             if (!player) return;
             const stat = ev.stat;
-            if (['growth', 'velocity', 'density'].includes(stat)) {
-                player.stats[stat] = (player.stats[stat] || 0) + 1;
+if (['growth', 'velocity', 'density'].includes(stat)) {
+                if ((player.stats[stat] || 0) < 8) {
+                    player.stats[stat] = (player.stats[stat] || 0) + 1;
+                }
                 player.multiTier = (player.multiTier || 0) + 1;
                 player.multiProgress = 0;
                 player._multiPendingTier = false;
