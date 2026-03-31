@@ -210,17 +210,19 @@ const suns = universe?.suns || [];
 // Seul l'état de conquête est autoritaire.
 function _buildSnapshot(state) {
     return {
-        planets: state.planets.map(p => ({
-            name:          p.name,
-            owner:         p.owner,
-            spores:        Math.round(p.spores        || 0),
-            sporesAttaque: Math.round(p.sporesAttaque || 0),
-            sporesDefense: Math.round(p.sporesDefense || 0),
-            symbiosis:     Math.round(p.symbiosis     || 0),
-            nids:          p.nids    || 0,
-            biomes:        p.biomes  || 0,
-            alveoles:      p.alveoles || 0,
-            buildMode:     p.buildMode || 'off',
+planets: state.planets.map(p => ({
+            name:             p.name,
+            owner:            p.owner,
+            spores:           Math.round(p.spores        || 0),
+            sporesAttaque:    Math.round(p.sporesAttaque || 0),
+            sporesDefense:    Math.round(p.sporesDefense || 0),
+            symbiosis:        Math.round(p.symbiosis     || 0),
+            nids:             p.nids    || 0,
+            biomes:           p.biomes  || 0,
+            alveoles:         p.alveoles || 0,
+            buildMode:        p.buildMode || 'off',
+            parasiteSpore:    p.parasiteSpore || 0,
+            parasiteProgress: Math.round((p.parasiteProgress || 0) * 10) / 10,
         })),
         moons: state.moons.map(m => ({
             name:   m.name,
