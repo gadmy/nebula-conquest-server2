@@ -396,8 +396,13 @@ function updateSporeGeneration(state, dt) {
             body.spores = Math.min(body.maxSpores, (body.spores || 0) + produced);
 
             // Multiplicité
-            if (totalSac > 0) {
-                player._multiPool = (player._multiPool || 0) + rate * totalSac * dt;
+            if (totalSac > 0 && player.multiTier < 10) {
+                player.multiProgress = (player.multiProgress || 0) + rate * totalSac * dt;
+                const tierCost = 500 * Math.pow(1.8, player.multiTier || 0);
+                if (player.multiProgress >= tierCost) {
+                    player.multiProgress -= tierCost;
+                    player._multiPendingTier = true;
+                }
             }
         }
     }
