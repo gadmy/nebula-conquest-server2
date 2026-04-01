@@ -225,7 +225,7 @@ planets: state.planets.map(p => ({
             parasiteProgress: Math.round((p.parasiteProgress || 0) * 10) / 10,
             baseMaxSpores:    p.baseMaxSpores || p.maxSpores,
             maxSpores:        Math.round(p.maxSpores || 0),
-            parasite:         p.parasite ? { ownerSlot: p.parasite.ownerSlot } : null,
+            parasite:         p.parasite ? { ownerSlot: p.parasite.ownerSlot, sourceName: p.parasite.sourceBody?.name || p.parasite.sourceName } : null,
         })),
         moons: state.moons.map(m => ({
             name:   m.name,
