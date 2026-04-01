@@ -399,6 +399,39 @@ function updateSporeGeneration(state, dt) {
             if ((body.sporesDefense || 0) < maxDef) {
                 body.sporesDefense = Math.min(maxDef, (body.sporesDefense || 0) + rate * 0.5 * dt);
             }
+// ── Drain parasite ──
+        if (body.parasite) {
+            const srcBody = body.parasite.sourceBody;
+            if (!srcBody || srcBody.owner !== body.parasite.ownerSlot) {
+                body.parasite = null;
+            } else {
+                const rawDrain = rate * 0.20;
+                const drainPerSec = rate >= 10 ? Math.max(1, Math.round(rawDrain)) : rawDrain;
+                const drain = drainPerSec * dt;
+                body.spores = Math.max(0, (body.spores || 0) - drain);
+                body.parasite._accumulator = (body.parasite._accumulator || 0) + drain;
+                if (body.parasite._accumulator >= 10) {
+                    const dx = srcBody.x - body.x, dy = srcBody.y - body.y;
+                    const len = Math.sqrt(dx*dx + dy*dy);
+                    if (len > 0) {
+                        state.jets.push({
+                            id: ++_jetIdCounter,
+                            owner: body.parasite.ownerSlot,
+                            color: '#22C55E',
+                            spores: Math.round(body.parasite._accumulator),
+                            sporeType: 'parasite_drain',
+                            trajectory: computeTrajectory(state, body.x, body.y, dx/len, dy/len, 25),
+                            posIndex: 0, x: body.x, y: body.y, speed: 25,
+                            alive: true, trail: [], age: 0,
+                            source: body, sourceName: body.name,
+                            _hitBelt: {}, _parasiteDrain: true, _targetBody: srcBody
+                        });
+                        body.parasite._accumulator = 0;
+                    }
+                }
+            }
+        }
+
         } else {
             const multiPct = (player.multiSacrifice || 0) / 100;
             const totalSac = Math.min(multiPct, 0.5);
