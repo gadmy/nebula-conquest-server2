@@ -213,9 +213,9 @@ function _buildSnapshot(state) {
 planets: state.planets.map(p => ({
             name:             p.name,
             owner:            p.owner,
-            spores:           Math.round(p.spores        || 0),
-            sporesAttaque:    Math.round(p.sporesAttaque || 0),
-            sporesDefense:    Math.round(p.sporesDefense || 0),
+            spores:           Math.round((p.spores        || 0) * 10) / 10,
+            sporesAttaque:    Math.round((p.sporesAttaque || 0) * 10) / 10,
+            sporesDefense:    Math.round((p.sporesDefense || 0) * 10) / 10,
             symbiosis:        Math.round(p.symbiosis     || 0),
             nids:             p.nids    || 0,
             biomes:           p.biomes  || 0,
