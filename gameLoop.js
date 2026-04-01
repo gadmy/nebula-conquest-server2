@@ -433,8 +433,8 @@ function applyConquest(state, body, jet) {
 
     if (jet.sporeType === 'parasite') {
         if (body.owner !== null && body.owner !== jet.owner) {
-            if (!body.parasite) {
-                body.parasite = { ownerSlot: jet.owner, sourceBody: jet.source, _accumulator: 0 };
+    if (!body.parasite) {
+                body.parasite = { ownerSlot: jet.owner, sourceBody: jet.source, sourceName: jet.sourceName, _accumulator: 0 };
                 body.droneCount = 0;
             }
         }
