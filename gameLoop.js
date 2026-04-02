@@ -525,7 +525,7 @@ function applyConquest(state, body, jet) {
         attacking    -= defenseDmg;
     }
 
-    if (attacking > 0 && body.spores <= 0) {
+if (attacking > 0 && body.spores <= 0) {
         const oldOwner = body.owner;
         if (oldOwner !== null && state.players[oldOwner]) {
             const arr = state.players[oldOwner].bodies;
@@ -540,6 +540,10 @@ function applyConquest(state, body, jet) {
         const _conquSun  = body.type === 'planet' ? body.parent : (body.parent?.parent || null);
         if (_conquSun) _conquSun._sysCache = null;
         if (state.players[jet.owner]?.bodies) state.players[jet.owner].bodies.push(body);
+        if (oldOwner === null) {
+            const _vb = body.type === 'planet' ? 500 : 250;
+            body.spores = Math.min(body.maxSpores, body.spores + _vb);
+        }
     }
 }
 
