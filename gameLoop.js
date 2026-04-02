@@ -536,7 +536,7 @@ if (attacking > 0 && body.spores <= 0) {
             const arr = state.players[oldOwner].bodies;
             if (arr) { const idx = arr.indexOf(body); if (idx >= 0) arr.splice(idx, 1); }
         }
-        body.owner       = jet.owner;
+body.owner       = jet.owner;
         body.spores      = attacking;
         body.faune       = 0;
         body.symbiosis   = 0;
@@ -544,6 +544,13 @@ if (attacking > 0 && body.spores <= 0) {
         body.buildMode   = 'off';
         const _conquSun  = body.type === 'planet' ? body.parent : (body.parent?.parent || null);
         if (_conquSun) _conquSun._sysCache = null;
+        const _keepBuildings = state.players[jet.owner]?.conquestKeepBuildings || false;
+        if (!_keepBuildings) {
+            body.nids    = 0;
+            body.biomes  = 0;
+            body.alveoles = 0;
+            body.maxSpores = body.baseMaxSpores || body.maxSpores;
+        }
         if (state.players[jet.owner]?.bodies) state.players[jet.owner].bodies.push(body);
         if (oldOwner === null) {
             const _vb = body.type === 'planet' ? 500 : 250;
