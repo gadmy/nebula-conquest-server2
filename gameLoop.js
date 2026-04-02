@@ -232,6 +232,9 @@ planets: state.planets.map(p => ({
             owner:     m.owner,
             spores:    Math.round(m.spores || 0),
             buildMode: m.buildMode || 'off',
+            nids:      m.nids     || 0,
+            biomes:    m.biomes   || 0,
+            alveoles:  m.alveoles || 0,
         })),
         jets: state.jets.map(j => ({
             id:     j.id,
