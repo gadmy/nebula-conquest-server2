@@ -77,9 +77,14 @@ if (ev.type === 'spawn') {
             }
         }
 
-        if (ev.type === 'set_sacrifice') {
+if (ev.type === 'set_sacrifice') {
             const player = state.players.find(p => p.socketId === socketId);
             if (player) player.multiSacrifice = ev.value;
+        }
+
+        if (ev.type === 'set_conquest_buildings') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) player.conquestKeepBuildings = ev.value;
         }
 
         if (ev.type === 'spawn_done') {
