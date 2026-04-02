@@ -227,10 +227,11 @@ planets: state.planets.map(p => ({
             maxSpores:        Math.round(p.maxSpores || 0),
             parasite:         p.parasite ? { ownerSlot: p.parasite.ownerSlot, sourceName: p.parasite.sourceBody?.name || p.parasite.sourceName } : null,
         })),
-        moons: state.moons.map(m => ({
-            name:   m.name,
-            owner:  m.owner,
-            spores: Math.round(m.spores || 0),
+            moons: state.moons.map(m => ({
+            name:      m.name,
+            owner:     m.owner,
+            spores:    Math.round(m.spores || 0),
+            buildMode: m.buildMode || 'off',
         })),
         jets: state.jets.map(j => ({
             id:     j.id,
