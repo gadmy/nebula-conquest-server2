@@ -108,7 +108,7 @@ if (['growth', 'velocity', 'density'].includes(stat)) {
             }
         }
 
-        if (ev.type === 'nidification') {
+if (ev.type === 'nidification') {
             const motherBody = state.planets.find(p => p.name === ev.bodyName)
                             || state.moons.find(m => m.name === ev.bodyName);
             if (!motherBody || motherBody._nidCooldown > 0) return;
@@ -118,11 +118,12 @@ if (['growth', 'velocity', 'density'].includes(stat)) {
                 .filter(b => b.owner === player.id && b !== motherBody);
             let gathered = 0;
             for (const b of allBodies) {
-                const take = Math.floor(b.spores * 0.5);
-                b.spores -= take;
-                gathered += take;
+                gathered += Math.floor(b.spores);
+                b.spores = 0;
             }
-            motherBody.spores = Math.min(motherBody.maxSpores, motherBody.spores + gathered);
+            motherBody._nidMaxSpores = motherBody._nidMaxSpores || motherBody.maxSpores;
+            motherBody.maxSpores = Math.max(motherBody.maxSpores, motherBody.spores + gathered + 1000);
+            motherBody.spores = motherBody.spores + gathered;
             motherBody._nidCooldown = 180;
         }
 
