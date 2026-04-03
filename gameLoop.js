@@ -537,7 +537,42 @@ if (attacking > 0 && body.spores <= 0) {
             const arr = state.players[oldOwner].bodies;
             if (arr) { const idx = arr.indexOf(body); if (idx >= 0) arr.splice(idx, 1); }
         }
-body.owner       = jet.owner;
+if (attacking > 0 && body.spores <= 0) {
+        const oldOwner = body.owner;
+        if (oldOwner !== null && state.players[oldOwner]) {
+            const arr = state.players[oldOwner].bodies;
+            if (arr) { const idx = arr.indexOf(body); if (idx >= 0) arr.splice(idx, 1); }
+        }
+
+        // Vérifier nidification avant de changer owner
+        if (oldOwner !== null && body.type === 'moon') {
+            const conquSun = body.parent?.parent || null;
+            if (conquSun) {
+                for (const planet of conquSun.planets) {
+                    if (planet.isMotherPlanet && planet.owner === oldOwner) {
+                        planet.invincible = false;
+                        const remainingMoons = planet.moons.filter(m => m.owner === oldOwner && m !== body);
+                        if (remainingMoons.length === 0) {
+                            planet.isMotherPlanet = false;
+                            if (planet._nidMaxSpores) {
+                                planet.maxSpores = planet._nidMaxSpores;
+                                planet.spores = Math.min(planet.spores, planet.maxSpores);
+                                planet._nidMaxSpores = null;
+                            }
+                        }
+                        if (conquSun) conquSun._sysCache = null;
+                        if (state._io && state._roomId) state._io.to(state._roomId).emit('build_complete', {
+                            slot: oldOwner,
+                            icon: remainingMoons.length === 0 ? '💔' : '⚠️',
+                            msg: remainingMoons.length === 0 ? `Planète mère perdue : ${planet.name}` : `Planète mère vulnérable : ${planet.name}`,
+                            bodyName: planet.name
+                        });
+                    }
+                }
+            }
+        }
+
+        body.owner       = jet.owner;
         body.spores      = attacking;
         body.faune       = 0;
         body.symbiosis   = 0;
