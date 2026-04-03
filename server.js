@@ -112,6 +112,20 @@ socket.on('player_action', (data) => {
     if (loop) loop.handleInput(socket.id, data);
   });
 
+  socket.on('spawn_ready', () => {
+    const roomId = roomManager.socketToRoom.get(socket.id);
+    if (!roomId) return;
+    const room = roomManager._getRoom(roomId);
+    if (!room) return;
+    if (!room._spawnReady) room._spawnReady = new Set();
+    room._spawnReady.add(socket.id);
+    const humanSlots = room.slots.filter(s => s.socketId !== null);
+    if (room._spawnReady.size >= humanSlots.length) {
+      room._spawnReady.clear();
+      io.to(roomId).emit('spawn_start');
+    }
+  });
+
   socket.on('game_snapshot', (snapshot) => {
     const roomId = roomManager.socketToRoom.get(socket.id);
     if (!roomId) return;
