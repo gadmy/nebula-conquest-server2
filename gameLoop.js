@@ -490,10 +490,13 @@ function applyConquest(state, body, jet) {
         return;
     }
 
-    if (body.isMotherPlanet) {
+if (body.isMotherPlanet) {
         const _hasLunes  = body.moons && body.moons.length > 0;
         const _lunesOwned = !_hasLunes || body.moons.every(m => m.owner === body.owner);
-        if (_lunesOwned) return;
+        if (_lunesOwned) {
+            if (state._io && state._roomId) state._io.to(state._roomId).emit('invincible_hit', { bodyName: body.name, x: body.x, y: body.y, radius: body.radius });
+            return;
+        }
     }
 
     if (body.owner !== null && body.owner !== jet.owner && _isAllied(jet.owner, body.owner, state.players)) {
