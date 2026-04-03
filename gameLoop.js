@@ -82,9 +82,22 @@ if (ev.type === 'set_sacrifice') {
             if (player) player.multiSacrifice = ev.value;
         }
 
-        if (ev.type === 'set_conquest_buildings') {
+if (ev.type === 'set_conquest_buildings') {
             const player = state.players.find(p => p.socketId === socketId);
             if (player) player.conquestKeepBuildings = ev.value;
+        }
+
+        if (ev.type === 'select_mother_planet') {
+            const body = state.planets.find(p => p.name === ev.bodyName)
+                      || state.moons.find(m => m.name === ev.bodyName);
+            const player = state.players.find(p => p.socketId === socketId);
+            if (body && player && Number(body.owner) === Number(player.id)) {
+                const ownedMoons = body.moons ? body.moons.filter(m => m.owner === player.id) : [];
+                if (ownedMoons.length > 0) {
+                    body.isMotherPlanet = true;
+                    body.invincible = true;
+                }
+            }
         }
 
         if (ev.type === 'spawn_done') {
