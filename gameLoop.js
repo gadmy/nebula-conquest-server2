@@ -537,12 +537,6 @@ if (attacking > 0 && body.spores <= 0) {
             const arr = state.players[oldOwner].bodies;
             if (arr) { const idx = arr.indexOf(body); if (idx >= 0) arr.splice(idx, 1); }
         }
-if (attacking > 0 && body.spores <= 0) {
-        const oldOwner = body.owner;
-        if (oldOwner !== null && state.players[oldOwner]) {
-            const arr = state.players[oldOwner].bodies;
-            if (arr) { const idx = arr.indexOf(body); if (idx >= 0) arr.splice(idx, 1); }
-        }
 
         // Vérifier nidification avant de changer owner
         if (oldOwner !== null && body.type === 'moon') {
