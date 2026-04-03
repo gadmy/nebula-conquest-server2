@@ -227,6 +227,7 @@ planets: state.planets.map(p => ({
             biomes:           p.biomes  || 0,
             alveoles:         p.alveoles || 0,
             buildMode:        p.buildMode || 'off',
+            isMotherPlanet:   p.isMotherPlanet || false,
             parasiteSpore:    p.parasiteSpore || 0,
             parasiteProgress: Math.round((p.parasiteProgress || 0) * 10) / 10,
             baseMaxSpores:    p.baseMaxSpores || p.maxSpores,
