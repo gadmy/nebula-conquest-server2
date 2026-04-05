@@ -870,7 +870,7 @@ function checkJetNeutralization(state) {
             if (jets[i].owner === jets[j].owner) continue;
             const dx = jets[i].x - jets[j].x;
             const dy = jets[i].y - jets[j].y;
-            if (dx * dx + dy * dy < 225) { // 15px²
+            if (dx * dx + dy * dy < 225) {
                 const min = Math.min(jets[i].spores, jets[j].spores);
                 jets[i].spores -= min;
                 jets[j].spores -= min;
@@ -879,7 +879,6 @@ function checkJetNeutralization(state) {
             }
         }
     }
-    checkJetNeutralization(state);
 }
 // ─── Tech ────────────────────────────────────────────────────
 function getTechCost(player, branch) {
