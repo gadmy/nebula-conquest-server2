@@ -860,6 +860,27 @@ function updateJets(state, dt) {
         }
     }
 }
+// ─── Neutralisation jets croisés ─────────────────────────────
+function checkJetNeutralization(state) {
+    const jets = state.jets;
+    for (let i = 0; i < jets.length; i++) {
+        if (!jets[i].alive) continue;
+        for (let j = i + 1; j < jets.length; j++) {
+            if (!jets[j].alive) continue;
+            if (jets[i].owner === jets[j].owner) continue;
+            const dx = jets[i].x - jets[j].x;
+            const dy = jets[i].y - jets[j].y;
+            if (dx * dx + dy * dy < 225) { // 15px²
+                const min = Math.min(jets[i].spores, jets[j].spores);
+                jets[i].spores -= min;
+                jets[j].spores -= min;
+                if (jets[i].spores <= 0) jets[i].alive = false;
+                if (jets[j].spores <= 0) jets[j].alive = false;
+            }
+        }
+    }
+    checkJetNeutralization(state);
+}
 // ─── Tech ────────────────────────────────────────────────────
 function getTechCost(player, branch) {
     const tech = player.tech; const lvl = tech[branch];
