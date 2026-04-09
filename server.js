@@ -49,12 +49,42 @@ const profile = {
     socket.emit('tournament_update', tournamentManager.getState());
   });
 
-  socket.on('tournament_register', () => {
+socket.on('tournament_register', () => {
     const result = tournamentManager.register(profile.pseudo, profile.color, socket.id);
     if (result.error) { socket.emit('tournament_error', { msg: result.error }); return; }
     socket.join('tournament');
     io.to('tournament').emit('tournament_update', tournamentManager.getState());
     console.log(`[TOURNAMENT] ${profile.pseudo} inscrit (${result.count}/32)`);
+
+    // 32 joueurs atteints → notifier + countdown 10s + lancer les rooms
+    if (result.bracket) {
+      console.log(`[TOURNAMENT] Bracket prêt — lancement dans 10s`);
+      io.to('tournament').emit('tournament_starting', { countdown: 10 });
+      setTimeout(() => {
+        for (const match of result.bracket) {
+          const roomId = `tournament-${match.matchId}`;
+          match.roomId = roomId;
+          // Créer la room tournoi
+          roomManager.createTournamentRoom(roomId, match.p1, match.p2);
+          // Notifier les deux joueurs
+          io.to(match.p1.socketId).emit('tournament_match_start', {
+            roomId,
+            matchId: match.matchId,
+            round: match.round,
+            opponent: { pseudo: match.p2.pseudo, color: match.p2.color },
+            slot: 0
+          });
+          io.to(match.p2.socketId).emit('tournament_match_start', {
+            roomId,
+            matchId: match.matchId,
+            round: match.round,
+            opponent: { pseudo: match.p1.pseudo, color: match.p1.color },
+            slot: 1
+          });
+        }
+        io.to('tournament').emit('tournament_update', tournamentManager.getState());
+      }, 10000);
+    }
   });
 
   socket.on('tournament_result', ({ matchId, winnerPseudo }) => {
