@@ -64,7 +64,7 @@ class TournamentManager {
 
   // ── Construction du bracket ───────────────────────────────────
 
-  _buildBracket() {
+_buildBracket() {
     const t = this.tournament;
     t.status = 'playing';
     t.round = 1;
@@ -84,9 +84,11 @@ class TournamentManager {
         p1: { pseudo: p1.pseudo, color: p1.color, socketId: p1.socketId },
         p2: { pseudo: p2.pseudo, color: p2.color, socketId: p2.socketId },
         winner: null,
-        status: 'pending' // pending → playing → done
+        status: 'pending'
       });
     }
+    // Retourner les matchs pour que server.js crée les rooms
+    return t.bracket;
   }
 
   // ── Résultat d'un match ───────────────────────────────────────
