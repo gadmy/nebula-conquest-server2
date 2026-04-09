@@ -156,6 +156,30 @@ class RoomManager {
     return { slot, room };
   }
 
+// ── TOURNOI : création de room 1v1 ───────────────────────────
+
+  createTournamentRoom(roomId, p1, p2) {
+    const slots = [
+      { slot: 0, socketId: p1.socketId, pseudo: p1.pseudo, color: p1.color, ready: false },
+      { slot: 1, socketId: p2.socketId, pseudo: p2.pseudo, color: p2.color, ready: false }
+    ];
+
+    const room = {
+      id: roomId,
+      mode: 'tournament',
+      slots,
+      status: 'waiting',
+      hostSlot: 0,
+      createdAt: Date.now()
+    };
+
+    this.rooms.set(roomId, room);
+    slots.forEach(s => { if (s.socketId) this.socketToRoom.set(s.socketId, roomId); });
+
+    console.log(`[TOURNAMENT] Room créée: ${roomId} — ${p1.pseudo} vs ${p2.pseudo}`);
+    return room;
+  }
+
   // ── Démarrage de partie ───────────────────────────────────────
 
   startGame(roomId, universe) {
