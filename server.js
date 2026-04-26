@@ -171,6 +171,13 @@ socket.on('game_start', ({ roomId, universe }) => {
     const room = roomManager.startGame(roomId, universe);
     if (!room) { socket.emit('error', { msg: 'Room introuvable' }); return; }
     console.log(`[game_start] room=${roomId} slots=${room.slots.length} universe=${!!universe}`);
+    // S'assurer que tous les sockets de la room ont rejoint le canal socket.io
+    for (const s of room.slots) {
+        if (s.socketId) {
+            const memberSocket = io.sockets.sockets.get(s.socketId);
+            if (memberSocket) memberSocket.join(roomId);
+        }
+    }
     io.to(roomId).emit('game_start', { roomId, universe, players: room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) });
     // Démarrer la simulation autoritaire
     if (!gameLoops.has(roomId)) {
