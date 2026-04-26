@@ -105,10 +105,14 @@ socket.on('tournament_register', () => {
   // RANKED 1v1
 socket.on('ranked_queue', () => {
     console.log(`[RANKED] ranked_queue reçu de ${profile.pseudo}`);
+    if (profile._rankedBanUntil && Date.now() < profile._rankedBanUntil) {
+      const remaining = Math.ceil((profile._rankedBanUntil - Date.now()) / 1000);
+      socket.emit('ranked_invite_error', { msg: `Cooldown anti-déconnexion : ${remaining}s restantes` });
+      return;
+    }
     const result = roomManager.joinRankedQueue(socket, profile);
     if (result?.matched) {
       const { roomId, p1, p2, maps } = result;
-      // Stocker les maps et le manche courant dans la room
       const room = roomManager._getRoom(roomId);
       if (room) { room._rankedMaps = maps; room._rankedManche = 0; }
       io.to(p1.socketId).emit('ranked_matched', { roomId, slot: 0, opponent: { pseudo: p2.pseudo, color: p2.color }, maps });
