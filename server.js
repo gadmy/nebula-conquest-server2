@@ -177,9 +177,14 @@ socket.on('game_start', ({ roomId, universe }) => {
     }
     io.to(roomId).emit('game_start', { roomId, universe, players: room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) });
     // Démarrer la simulation autoritaire
-    if (!gameLoops.has(roomId)) {
+if (!gameLoops.has(roomId)) {
       const loop = new GameLoop(roomId, io);
       loop.start(universe);
+      // Pour les rooms ranked : transmettre le numéro de manche
+      if (roomId.startsWith('ranked-') && room._rankedManche !== undefined) {
+        loop.state._rankedManche = room._rankedManche;
+        room._rankedManche++;
+      }
       // Associer socketId → slot sur chaque player
       for (const s of room.slots) {
         const p = loop.state.players.find(p => p.id === s.slot);
