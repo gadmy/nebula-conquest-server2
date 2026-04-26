@@ -156,6 +156,42 @@ class RoomManager {
     return { slot, room };
   }
 
+// ── RANKED 1v1 : file d'attente ──────────────────────────────────────────────
+
+  joinRankedQueue(socket, profile) {
+    if (this.rankedQueue === undefined) this.rankedQueue = [];
+    if (this.rankedQueue.find(e => e.socket.id === socket.id)) return null;
+    this.rankedQueue.push({ socket, profile });
+    console.log(`[RANKED] File: ${this.rankedQueue.length}/2`);
+    socket.emit('ranked_queue_status', { position: this.rankedQueue.length });
+
+    if (this.rankedQueue.length >= 2) {
+      const [e1, e2] = this.rankedQueue.splice(0, 2);
+      const roomId = 'ranked-' + Math.random().toString(36).slice(2, 8);
+      const p1 = { pseudo: e1.profile.pseudo, color: e1.profile.color, socketId: e1.socket.id };
+      const p2 = { pseudo: e2.profile.pseudo, color: e2.profile.color, socketId: e2.socket.id };
+      this.createTournamentRoom(roomId, p1, p2);
+      const maps = this.pickRankedMaps();
+      return { matched: true, roomId, p1, p2, maps };
+    }
+    return { matched: false };
+  }
+
+  leaveRankedQueue(socketId) {
+    if (!this.rankedQueue) return;
+    this.rankedQueue = this.rankedQueue.filter(e => e.socket.id !== socketId);
+  }
+
+  pickRankedMaps() {
+    const allMaps = [];
+    const cycles = ['cycle1'];
+    for (const cycle of cycles) {
+      for (let i = 0; i < 5; i++) allMaps.push({ cycle, round: i + 1 });
+    }
+    const shuffled = allMaps.sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, 3);
+  }
+
 // ── TOURNOI : création de room 1v1 ───────────────────────────
 
   createTournamentRoom(roomId, p1, p2) {
