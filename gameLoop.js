@@ -40,10 +40,13 @@ handleInput(socketId, ev) {
         if (!this.state || !ev?.type) return;
         const state = this.state;
 
-        if (ev.type === 'jet') {
+if (ev.type === 'jet') {
             const src = state.planets.find(p => p.name === ev.srcName)
                      || state.moons.find(m => m.name === ev.srcName);
             if (!src) return;
+            // Anti-triche : vérifier que le joueur possède bien cette planète
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player || src.owner !== player.id) return;
             const prevCount = state.jets.length;
             launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
             // Notifier tous les clients pour qu'ils animent le jet localement
