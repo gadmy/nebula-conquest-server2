@@ -227,11 +227,14 @@ socket.on('player_action', (data) => {
     socket.to(roomId).emit('game_snapshot', snapshot);
   });
 
-  socket.on('game_end', (data) => {
+socket.on('game_end', (data) => {
     const roomId = roomManager.socketToRoom.get(socket.id);
     if (!roomId) return;
     io.to(roomId).emit('game_end', data);
   });
+
+  // Intercepter game_over pour les rooms ranked
+  // (émis par gameLoop._checkVictory, on l'écoute via io.on)
 
   // DÉCONNEXION
   socket.on('invite_declined', ({ targetPseudo }) => {
