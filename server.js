@@ -103,7 +103,8 @@ socket.on('tournament_register', () => {
   socket.on('multi_queue_leave', () => { roomManager.leaveMultiQueue(socket.id); socket.emit('queue_left'); });
 
   // RANKED 1v1
-  socket.on('ranked_queue', () => {
+socket.on('ranked_queue', () => {
+    console.log(`[RANKED] ranked_queue reçu de ${profile.pseudo}`);
     const result = roomManager.joinRankedQueue(socket, profile);
     if (result?.matched) {
       const { roomId, p1, p2, maps } = result;
