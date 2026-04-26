@@ -108,6 +108,9 @@ socket.on('ranked_queue', () => {
     const result = roomManager.joinRankedQueue(socket, profile);
     if (result?.matched) {
       const { roomId, p1, p2, maps } = result;
+      // Stocker les maps et le manche courant dans la room
+      const room = roomManager._getRoom(roomId);
+      if (room) { room._rankedMaps = maps; room._rankedManche = 0; }
       io.to(p1.socketId).emit('ranked_matched', { roomId, slot: 0, opponent: { pseudo: p2.pseudo, color: p2.color }, maps });
       io.to(p2.socketId).emit('ranked_matched', { roomId, slot: 1, opponent: { pseudo: p1.pseudo, color: p1.color }, maps });
       console.log(`[RANKED] ${p1.pseudo} vs ${p2.pseudo} — room=${roomId}`);
