@@ -196,8 +196,22 @@ socket.on('player_action', (data) => {
     const roomId = roomManager.socketToRoom.get(socket.id);
     if (!roomId) return;
     const loop = gameLoops.get(roomId);
-    if (loop) loop.handleInput(socket.id, data);
-  });
+    if (!loop) return;
+
+    // Rate limiting jets : max 5/seconde par joueur
+    if (data?.type === 'jet') {
+        const now = Date.now();
+        if (!socket._jetTimestamps) socket._jetTimestamps = [];
+        socket._jetTimestamps = socket._jetTimestamps.filter(t => now - t < 1000);
+        if (socket._jetTimestamps.length >= 5) {
+            console.warn(`[ANTICHEAT] spam jets détecté : ${profile.pseudo}`);
+            return;
+        }
+        socket._jetTimestamps.push(now);
+    }
+
+    loop.handleInput(socket.id, data);
+});
 
   socket.on('spawn_ready', () => {
     const roomId = roomManager.socketToRoom.get(socket.id);
