@@ -98,9 +98,58 @@ socket.on('tournament_register', () => {
     }
   });
 
-  // MULTI
+// MULTI
   socket.on('multi_queue', () => { roomManager.joinMultiQueue(socket, profile); });
   socket.on('multi_queue_leave', () => { roomManager.leaveMultiQueue(socket.id); socket.emit('queue_left'); });
+
+  // RANKED 1v1
+  socket.on('ranked_queue', () => {
+    const result = roomManager.joinRankedQueue(socket, profile);
+    if (result?.matched) {
+      const { roomId, p1, p2, maps } = result;
+      io.to(p1.socketId).emit('ranked_matched', { roomId, slot: 0, opponent: { pseudo: p2.pseudo, color: p2.color }, maps });
+      io.to(p2.socketId).emit('ranked_matched', { roomId, slot: 1, opponent: { pseudo: p1.pseudo, color: p1.color }, maps });
+      console.log(`[RANKED] ${p1.pseudo} vs ${p2.pseudo} — room=${roomId}`);
+    }
+  });
+
+  socket.on('ranked_queue_leave', () => {
+    roomManager.leaveRankedQueue(socket.id);
+    socket.emit('ranked_queue_left');
+  });
+
+  socket.on('ranked_invite', ({ targetPseudo }) => {
+    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
+    if (!targetSocketId) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
+    io.to(targetSocketId).emit('ranked_invite_received', { fromPseudo: profile.pseudo, fromColor: profile.color });
+  });
+
+  socket.on('ranked_invite_accept', ({ fromPseudo }) => {
+    const fromSocketId = pseudoToSocket.get(fromPseudo.toLowerCase());
+    if (!fromSocketId) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable' }); return; }
+    const maps = roomManager.pickRankedMaps();
+    const roomId = 'ranked-' + Math.random().toString(36).slice(2, 8);
+    const p1 = { pseudo: fromPseudo, color: '#C084FC', socketId: fromSocketId };
+    const p2 = { pseudo: profile.pseudo, color: profile.color, socketId: socket.id };
+    roomManager.createTournamentRoom(roomId, p1, p2);
+    io.to(fromSocketId).emit('ranked_matched', { roomId, slot: 0, opponent: { pseudo: p2.pseudo, color: p2.color }, maps });
+    socket.emit('ranked_matched', { roomId, slot: 1, opponent: { pseudo: p1.pseudo, color: p1.color }, maps });
+    console.log(`[RANKED] invite ${p1.pseudo} vs ${p2.pseudo} — room=${roomId}`);
+  });
+
+  socket.on('ranked_invite_declined', ({ targetPseudo }) => {
+    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
+    if (targetSocketId) io.to(targetSocketId).emit('ranked_invite_declined', { fromPseudo: profile.pseudo });
+  });
+
+  socket.on('ranked_result', ({ roomId, winnerSlot, manche }) => {
+    // Broadcaster le résultat de manche aux deux joueurs de la room
+    const room = roomManager._getRoom(roomId);
+    if (!room) return;
+    for (const s of room.slots) {
+      if (s.socketId) io.to(s.socketId).emit('ranked_manche_result', { winnerSlot, manche });
+    }
+  });
 
   // LOCAL
   socket.on('local_create', () => {
