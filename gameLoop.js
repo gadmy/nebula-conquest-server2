@@ -1183,13 +1183,20 @@ function _checkVictory(state, io, roomId) {
     const alivePlayers = state.players.filter(p => p.alive);
     if (alivePlayers.length === 0) return;
 
-    if (alivePlayers.length === 1) {
+if (alivePlayers.length === 1) {
         state._gameOver = true;
         io.to(roomId).emit('game_over', {
             winnerSlot: alivePlayers[0].id,
             reason: 'last_standing',
             stats: { timeElapsed: state.time }
         });
+        // Anti-triche : si room ranked, émettre le résultat de manche côté serveur
+        if (roomId.startsWith('ranked-')) {
+            io.to(roomId).emit('ranked_manche_result', {
+                winnerSlot: alivePlayers[0].id,
+                manche: state._rankedManche || 0
+            });
+        }
         return;
     }
 
@@ -1201,13 +1208,19 @@ function _checkVictory(state, io, roomId) {
                 .filter(p => p.team === player.team)
                 .reduce((sum, p) => sum + p.bodies.length, 0);
         }
-        if (owned / totalBodies >= 0.8) {
+if (owned / totalBodies >= 0.8) {
             state._gameOver = true;
             io.to(roomId).emit('game_over', {
                 winnerSlot: player.id,
                 reason: 'domination',
                 stats: { timeElapsed: state.time }
             });
+            if (roomId.startsWith('ranked-')) {
+                io.to(roomId).emit('ranked_manche_result', {
+                    winnerSlot: player.id,
+                    manche: state._rankedManche || 0
+                });
+            }
             return;
         }
     }
