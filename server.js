@@ -143,14 +143,8 @@ socket.on('ranked_queue', () => {
     if (targetSocketId) io.to(targetSocketId).emit('ranked_invite_declined', { fromPseudo: profile.pseudo });
   });
 
-  socket.on('ranked_result', ({ roomId, winnerSlot, manche }) => {
-    // Broadcaster le résultat de manche aux deux joueurs de la room
-    const room = roomManager._getRoom(roomId);
-    if (!room) return;
-    for (const s of room.slots) {
-      if (s.socketId) io.to(s.socketId).emit('ranked_manche_result', { winnerSlot, manche });
-    }
-  });
+// ranked_result ignoré — le serveur détermine le gagnant via game_over
+  // socket.on('ranked_result', ...) supprimé anti-triche
 
   // LOCAL
   socket.on('local_create', () => {
