@@ -266,11 +266,24 @@ socket.on('player_ready', ({ roomId }) => {
     io.to(targetSocketId).emit('invite_received', { roomId, fromPseudo: profile.pseudo });
   });
 
-  socket.on('disconnect', () => {
+socket.on('disconnect', () => {
     console.log(`[-] ${profile.pseudo} (${socket.id})`);
     const tResult = tournamentManager.handleDisconnect(socket.id);
     if (tResult) io.to('tournament').emit('tournament_update', tournamentManager.getState());
     pseudoToSocket.delete(profile.pseudo.toLowerCase());
+
+    // Anti-triche : déco volontaire en ranked = forfait + cooldown
+    const disconnRoom = roomManager._getRoomOfSocket ? roomManager._getRoomOfSocket(socket.id) : null;
+    if (disconnRoom && disconnRoom.id.startsWith('ranked-')) {
+      if (!profile._rankedDiscoCount) profile._rankedDiscoCount = 0;
+      profile._rankedDiscoCount++;
+      if (profile._rankedDiscoCount >= 3) {
+        console.warn(`[ANTICHEAT] ${profile.pseudo} déconnexions répétées en ranked (${profile._rankedDiscoCount})`);
+        // Cooldown : bloquer la file ranked pendant 5 minutes
+        profile._rankedBanUntil = Date.now() + 5 * 60 * 1000;
+        profile._rankedDiscoCount = 0;
+      }
+    }
 const result = roomManager.handleDisconnect(socket.id);
     if (result?.room) {
       const roomId = result.room.id;
