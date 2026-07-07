@@ -81,14 +81,16 @@ const roomManager = new RoomManager();
 const gameLoops = new Map(); // roomId → GameLoop
 const tournamentManager = new TournamentManager();
 const pseudoToSocket = new Map();
+const socketToUserId = new Map();
 
 io.on('connection', (socket) => {
 const profile = {
     pseudo: socket.handshake.auth?.pseudo || 'Joueur',
     color:  socket.handshake.auth?.color  || '#C084FC',
-    userId: socket.handshake.auth?.userId || null
+  userId: socket.handshake.auth?.userId || null
   };
   pseudoToSocket.set(profile.pseudo.toLowerCase(), socket.id);
+  if (profile.userId) socketToUserId.set(socket.id, profile.userId);
 
   console.log(`[+] ${profile.pseudo} (${socket.id})`);
 
