@@ -3,6 +3,54 @@ const http = require('http');
 const { Server } = require('socket.io');
 const RoomManager = require('./roomManager');
 const TournamentManager = require('./tournamentManager');
+const { createClient } = require('@supabase/supabase-js');
+
+// ── Supabase (service_role, serveur uniquement) ──────────────
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+const supa = (SUPABASE_URL && SUPABASE_SERVICE_KEY)
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { auth: { persistSession: false } })
+    : null;
+if (supa) console.log('[SUPABASE] client service_role prêt');
+else console.warn('[SUPABASE] SUPABASE_URL ou SUPABASE_SERVICE_KEY manquant — ELO désactivé');
+
+// ── ELO ──────────────────────────────────────────────────────
+const ELO_K = 32;
+const ELO_DEFAULT = 1000;
+
+function computeElo(ra, rb, scoreA, k = ELO_K) {
+    const ea = 1 / (1 + Math.pow(10, (rb - ra) / 400));
+    return Math.round(ra + k * (scoreA - ea));
+}
+
+// Match 1v1 terminé : winner gagne, loser perd. {userId} requis.
+async function applyEloForMatch(winner, loser) {
+    if (!supa) return null;
+    if (!winner?.userId || !loser?.userId) return null;
+    try {
+        const { data, error } = await supa
+            .from('profiles')
+            .select('id, elo')
+            .in('id', [winner.userId, loser.userId]);
+        if (error) { console.warn('[ELO] lecture échouée:', error.message); return null; }
+
+        const rw = (data.find(r => r.id === winner.userId)?.elo ?? ELO_DEFAULT);
+        const rl = (data.find(r => r.id === loser.userId)?.elo ?? ELO_DEFAULT);
+        const newW = computeElo(rw, rl, 1);
+        const newL = computeElo(rl, rw, 0);
+
+        const upW = await supa.from('profiles').update({ elo: newW }).eq('id', winner.userId);
+        const upL = await supa.from('profiles').update({ elo: newL }).eq('id', loser.userId);
+        if (upW.error) console.warn('[ELO] update winner échoué:', upW.error.message);
+        if (upL.error) console.warn('[ELO] update loser échoué:', upL.error.message);
+
+        console.log(`[ELO] W ${rw}->${newW} | L ${rl}->${newL}`);
+        return { winner: { before: rw, after: newW }, loser: { before: rl, after: newL } };
+    } catch (e) {
+        console.warn('[ELO] exception:', e.message);
+        return null;
+    }
+}
 
 const PORT = process.env.PORT || 3000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'https://gadmy.github.io';
