@@ -168,8 +168,8 @@ class RoomManager {
     if (this.rankedQueue.length >= 2) {
       const [e1, e2] = this.rankedQueue.splice(0, 2);
       const roomId = 'ranked-' + Math.random().toString(36).slice(2, 8);
-      const p1 = { pseudo: e1.profile.pseudo, color: e1.profile.color, socketId: e1.socket.id };
-      const p2 = { pseudo: e2.profile.pseudo, color: e2.profile.color, socketId: e2.socket.id };
+      const p1 = { pseudo: e1.profile.pseudo, color: e1.profile.color, socketId: e1.socket.id, userId: e1.profile.userId || null };
+      const p2 = { pseudo: e2.profile.pseudo, color: e2.profile.color, socketId: e2.socket.id, userId: e2.profile.userId || null };
       this.createTournamentRoom(roomId, p1, p2);
       const maps = this.pickRankedMaps();
       return { matched: true, roomId, p1, p2, maps };
@@ -196,8 +196,8 @@ class RoomManager {
 
   createTournamentRoom(roomId, p1, p2) {
     const slots = [
-      { slot: 0, socketId: p1.socketId, pseudo: p1.pseudo, color: p1.color, ready: false },
-      { slot: 1, socketId: p2.socketId, pseudo: p2.pseudo, color: p2.color, ready: false }
+      { slot: 0, socketId: p1.socketId, pseudo: p1.pseudo, color: p1.color, ready: false, userId: p1.userId || null },
+      { slot: 1, socketId: p2.socketId, pseudo: p2.pseudo, color: p2.color, ready: false, userId: p2.userId || null }
     ];
 
     const room = {
