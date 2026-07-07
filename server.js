@@ -187,8 +187,8 @@ socket.on('ranked_queue', () => {
     if (!fromSocketId) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable' }); return; }
     const maps = roomManager.pickRankedMaps();
     const roomId = 'ranked-' + Math.random().toString(36).slice(2, 8);
-    const p1 = { pseudo: fromPseudo, color: '#C084FC', socketId: fromSocketId };
-    const p2 = { pseudo: profile.pseudo, color: profile.color, socketId: socket.id };
+    const p1 = { pseudo: fromPseudo, color: '#C084FC', socketId: fromSocketId, userId: socketToUserId.get(fromSocketId) || null };
+    const p2 = { pseudo: profile.pseudo, color: profile.color, socketId: socket.id, userId: profile.userId || null };
     roomManager.createTournamentRoom(roomId, p1, p2);
     io.to(fromSocketId).emit('ranked_matched', { roomId, slot: 0, opponent: { pseudo: p2.pseudo, color: p2.color }, maps });
     socket.emit('ranked_matched', { roomId, slot: 1, opponent: { pseudo: p1.pseudo, color: p1.color }, maps });
