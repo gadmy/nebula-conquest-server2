@@ -1193,12 +1193,9 @@ if (alivePlayers.length === 1) {
             reason: 'last_standing',
             stats: { timeElapsed: state.time }
         });
-        // Anti-triche : si room ranked, émettre le résultat de manche côté serveur
-        if (roomId.startsWith('ranked-')) {
-            io.to(roomId).emit('ranked_manche_result', {
-                winnerSlot: alivePlayers[0].id,
-                manche: state._rankedManche || 0
-            });
+// Résultat de manche géré par le serveur (score best-of-3 + ELO)
+        if (roomId.startsWith('ranked-') && state._onRankedManche) {
+            state._onRankedManche(alivePlayers[0].id);
         }
         return;
     }
@@ -1218,11 +1215,8 @@ if (owned / totalBodies >= 0.8) {
                 reason: 'domination',
                 stats: { timeElapsed: state.time }
             });
-            if (roomId.startsWith('ranked-')) {
-                io.to(roomId).emit('ranked_manche_result', {
-                    winnerSlot: player.id,
-                    manche: state._rankedManche || 0
-                });
+if (roomId.startsWith('ranked-') && state._onRankedManche) {
+                state._onRankedManche(player.id);
             }
             return;
         }
