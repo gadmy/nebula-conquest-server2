@@ -83,6 +83,31 @@ const tournamentManager = new TournamentManager();
 const pseudoToSocket = new Map();
 const socketToUserId = new Map();
 
+// Fin de manche ranked : score best-of-3 autoritaire + ELO en fin de match
+function handleRankedManche(roomId, winnerSlot) {
+    const room = roomManager._getRoom(roomId);
+    const loop = gameLoops.get(roomId);
+    if (loop) { loop.stop(); gameLoops.delete(roomId); }   // stoppe la boucle + libère la room pour la manche suivante
+    if (!room) return;
+
+    if (!room._rankedScores) room._rankedScores = [0, 0];
+    if (winnerSlot === 0 || winnerSlot === 1) room._rankedScores[winnerSlot]++;
+    const scores = room._rankedScores;
+
+    if (scores[0] >= 2 || scores[1] >= 2) {
+        const winSlot  = scores[0] >= 2 ? 0 : 1;
+        const loseSlot = winSlot === 0 ? 1 : 0;
+        const winner = room.slots.find(s => s.slot === winSlot);
+        const loser  = room.slots.find(s => s.slot === loseSlot);
+        room.status = 'ended';
+        applyEloForMatch(winner, loser).then((elo) => {
+            io.to(roomId).emit('ranked_match_over', { winnerSlot: winSlot, scores, elo });
+        });
+    } else {
+        io.to(roomId).emit('ranked_manche_result', { winnerSlot, scores });
+    }
+}
+
 io.on('connection', (socket) => {
 const profile = {
     pseudo: socket.handshake.auth?.pseudo || 'Joueur',
@@ -234,10 +259,12 @@ socket.on('game_start', ({ roomId, universe }) => {
 if (!gameLoops.has(roomId)) {
       const loop = new GameLoop(roomId, io);
       loop.start(universe);
-      // Pour les rooms ranked : transmettre le numéro de manche
-      if (roomId.startsWith('ranked-') && room._rankedManche !== undefined) {
-        loop.state._rankedManche = room._rankedManche;
-        room._rankedManche++;
+// Rooms ranked : numéro de manche, score de match et hook fin de manche
+      if (roomId.startsWith('ranked-')) {
+        loop.state._rankedManche = room._rankedManche || 0;
+        room._rankedManche = (room._rankedManche || 0) + 1;
+        if (!room._rankedScores) room._rankedScores = [0, 0];
+        loop.state._onRankedManche = (winnerSlot) => handleRankedManche(roomId, winnerSlot);
       }
       // Associer socketId → slot sur chaque player
       for (const s of room.slots) {
