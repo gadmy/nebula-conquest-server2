@@ -368,7 +368,14 @@ function updateSporeGeneration(state, dt) {
         const symBonusMax = body.type === 'planet' ? 0.20 : 0.10;
         const symBonus = 1 + (body.symbiosis / 100) * symBonusMax;
         const nidBonus = 1 + (body.nids || 0) * 0.025;
-        const _alvMax = Math.floor((body.baseMaxSpores || body.maxSpores) * (1 + (body.alveoles || 0) * 0.05));
+        /* Le maximum de base doit toujours exister avant d'appliquer les
+           alveoles, sinon le maximum deja augmente sert de base et se
+           multiplie a nouveau a chaque image. On le reconstitue a partir du
+           maximum courant, ce qui rend le calcul idempotent. */
+        if (body.baseMaxSpores === undefined || body.baseMaxSpores === null) {
+            body.baseMaxSpores = Math.round(body.maxSpores / (1 + (body.alveoles || 0) * 0.05));
+        }
+        const _alvMax = Math.floor(body.baseMaxSpores * (1 + (body.alveoles || 0) * 0.05));
         if (body.maxSpores !== _alvMax) body.maxSpores = _alvMax;
 
         let sysBonus = 1;
