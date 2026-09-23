@@ -351,9 +351,41 @@ function updateOrbits(state, dt) {
 /* Effet des batiments : un seul endroit ou les regler, en miroir du client.
    Les deux doivent rester identiques, sinon solo et multijoueur ne calculent
    plus la meme chose. */
-const BONUS_ALVEOLE = 0.06;   /* stockage maximum, par alveole */
-const BONUS_NID     = 0.03;   /* production, par nid */
-const BONUS_BIOME   = 0.06;   /* defense a l'impact, par biome */
+/* Rendements decroissants, les memes pour les trois genres : le premier
+   batiment rapporte 20 %, le deuxieme 15 %, le troisieme 10 %, et chacun des
+   suivants 5 %. A partir du quatrieme, le cout monte de 10 % a chaque fois.
+   Ces regles doivent rester identiques a celles du client, sinon solo et
+   multijoueur ne calculent plus la meme chose. */
+const PALIERS_BATIMENT = [0.20, 0.15, 0.10];
+const PALIER_SUIVANT   = 0.05;
+const COUT_BATIMENT    = { alveole: 0.10, nid: 0.15, biome: 0.20 };
+const COUT_MAJORATION  = 1.10;
+
+function bonusBatiment(n) {
+    if (!(n > 0)) return 0;
+    let t = 0;
+    for (let i = 0; i < PALIERS_BATIMENT.length && i < n; i++) t += PALIERS_BATIMENT[i];
+    if (n > PALIERS_BATIMENT.length) t += (n - PALIERS_BATIMENT.length) * PALIER_SUIVANT;
+    return t;
+}
+
+function nbBatiment(body, mode) {
+    if (mode === 'alveole') return body.alveoles || 0;
+    if (mode === 'nid')     return body.nids || 0;
+    if (mode === 'biome')   return body.biomes || 0;
+    return 0;
+}
+
+function coutBatiment(body, mode) {
+    const pctc = COUT_BATIMENT[mode];
+    if (!pctc) return 0;
+    const base = (body.baseMaxSpores || body.maxSpores) * pctc;
+    const rang = nbBatiment(body, mode) + 1;
+    const majo = rang > PALIERS_BATIMENT.length
+               ? Math.pow(COUT_MAJORATION, rang - PALIERS_BATIMENT.length)
+               : 1;
+    return Math.floor(base * majo);
+}
 
 function updateSporeGeneration(state, dt) {
     const bodies = state.allBodies;
@@ -374,15 +406,15 @@ function updateSporeGeneration(state, dt) {
 
         const symBonusMax = body.type === 'planet' ? 0.20 : 0.10;
         const symBonus = 1 + (body.symbiosis / 100) * symBonusMax;
-        const nidBonus = 1 + (body.nids || 0) * BONUS_NID;
+        const nidBonus = 1 + bonusBatiment(body.nids || 0);
         /* Le maximum de base doit toujours exister avant d'appliquer les
            alveoles, sinon le maximum deja augmente sert de base et se
            multiplie a nouveau a chaque image. On le reconstitue a partir du
            maximum courant, ce qui rend le calcul idempotent. */
         if (body.baseMaxSpores === undefined || body.baseMaxSpores === null) {
-            body.baseMaxSpores = Math.round(body.maxSpores / (1 + (body.alveoles || 0) * BONUS_ALVEOLE));
+            body.baseMaxSpores = Math.round(body.maxSpores / (1 + bonusBatiment(body.alveoles || 0)));
         }
-        const _alvMax = Math.floor(body.baseMaxSpores * (1 + (body.alveoles || 0) * BONUS_ALVEOLE));
+        const _alvMax = Math.floor(body.baseMaxSpores * (1 + bonusBatiment(body.alveoles || 0)));
         if (body.maxSpores !== _alvMax) body.maxSpores = _alvMax;
 
         let sysBonus = 1;
@@ -450,8 +482,7 @@ function updateSporeGeneration(state, dt) {
                produire pour se les offrir. */
             if (body.buildMode === 'nid' || body.buildMode === 'biome' || body.buildMode === 'alveole') {
                 const _buildType = body.buildMode;
-                const _costPct = _buildType === 'nid' ? 0.15 : _buildType === 'alveole' ? 0.10 : 0.20;
-                const _buildCost = Math.floor((body.baseMaxSpores || body.maxSpores) * _costPct);
+                const _buildCost = coutBatiment(body, _buildType);
                 if (body.spores >= _buildCost) {
                     body.spores -= _buildCost;
                     body.buildProgress = 0;
@@ -525,7 +556,7 @@ function applyConquest(state, body, jet) {
         attacking   -= fauneDmg;
     }
 
-    const biomeDefense = 1 + (body.biomes || 0) * BONUS_BIOME;
+    const biomeDefense = 1 + bonusBatiment(body.biomes || 0);
     attacking = attacking / biomeDefense;
 
     if (attacking > 0 && body.owner !== null && body.spores > 0) {
