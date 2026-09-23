@@ -381,19 +381,13 @@ function updateSporeGeneration(state, dt) {
             const _buildType = body.buildMode;
             const _costPct = body.buildMode === 'nid' ? 0.15 : body.buildMode === 'alveole' ? 0.10 : 0.20;
             const _buildCost = Math.floor((body.baseMaxSpores || body.maxSpores) * _costPct);
-            if (body.spores < _buildCost * 0.8 && (body.buildProgress || 0) === 0) {
-                // attendre
-            } else if (body.spores < 5 && (body.buildProgress || 0) > 0) {
-                body.buildProgress = 0;
-                body.buildMode = 'off';
-            } else {
-                const _drainRate = _buildCost / 8;
-                const _drain = Math.min(_drainRate * dt, body.spores - 5, _buildCost - (body.buildProgress || 0));
-                if (_drain > 0) {
-                    body.spores -= _drain;
-                    body.buildProgress = (body.buildProgress || 0) + _drain;
-                }
-                    if ((body.buildProgress || 0) >= _buildCost) {
+            /* Construction immediate : des que l'astre a de quoi payer, le
+               batiment sort. Plus de drain sur huit secondes, donc plus de
+               chantier a moitie fini qu'une attaque pouvait annuler en
+               emportant les spores deja versees. */
+            {
+                if (body.spores >= _buildCost) {
+                    body.spores -= _buildCost;
                     body.buildProgress = 0;
                     body.buildMode = 'off';
                     let _evIcon = '', _evMsg = '';
