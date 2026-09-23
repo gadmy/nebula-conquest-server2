@@ -393,12 +393,16 @@ const PALIER_SUIVANT   = 0.05;
 const COUT_BATIMENT    = { alveole: 0.10, nid: 0.15, biome: 0.20 };
 const COUT_MAJORATION  = 1.10;
 
-function bonusBatiment(n) {
+/* Le nid est une fois et demie plus fort que les deux autres, a cout egal.
+   Doit rester identique au client. */
+const FORCE_GENRE = { alveole: 1, nid: 1.5, biome: 1 };
+
+function bonusBatiment(n, genre) {
     if (!(n > 0)) return 0;
     let t = 0;
     for (let i = 0; i < PALIERS_BATIMENT.length && i < n; i++) t += PALIERS_BATIMENT[i];
     if (n > PALIERS_BATIMENT.length) t += (n - PALIERS_BATIMENT.length) * PALIER_SUIVANT;
-    return t;
+    return t * (FORCE_GENRE[genre] || 1);
 }
 
 function nbBatiment(body, mode) {
@@ -438,15 +442,15 @@ function updateSporeGeneration(state, dt) {
 
         const symBonusMax = body.type === 'planet' ? 0.20 : 0.10;
         const symBonus = 1 + (body.symbiosis / 100) * symBonusMax;
-        const nidBonus = 1 + bonusBatiment(body.nids || 0);
+        const nidBonus = 1 + bonusBatiment(body.nids || 0, 'nid');
         /* Le maximum de base doit toujours exister avant d'appliquer les
            alveoles, sinon le maximum deja augmente sert de base et se
            multiplie a nouveau a chaque image. On le reconstitue a partir du
            maximum courant, ce qui rend le calcul idempotent. */
         if (body.baseMaxSpores === undefined || body.baseMaxSpores === null) {
-            body.baseMaxSpores = Math.round(body.maxSpores / (1 + bonusBatiment(body.alveoles || 0)));
+            body.baseMaxSpores = Math.round(body.maxSpores / (1 + bonusBatiment(body.alveoles || 0, 'alveole')));
         }
-        const _alvMax = Math.floor(body.baseMaxSpores * (1 + bonusBatiment(body.alveoles || 0)));
+        const _alvMax = Math.floor(body.baseMaxSpores * (1 + bonusBatiment(body.alveoles || 0, 'alveole')));
         if (body.maxSpores !== _alvMax) body.maxSpores = _alvMax;
 
         let sysBonus = 1;
@@ -588,7 +592,7 @@ function applyConquest(state, body, jet) {
         attacking   -= fauneDmg;
     }
 
-    const biomeDefense = 1 + bonusBatiment(body.biomes || 0);
+    const biomeDefense = 1 + bonusBatiment(body.biomes || 0, 'biome');
     attacking = attacking / biomeDefense;
 
     if (attacking > 0 && body.owner !== null && body.spores > 0) {
