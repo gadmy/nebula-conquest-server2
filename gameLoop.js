@@ -90,19 +90,6 @@ if (ev.type === 'set_conquest_buildings') {
             if (player) player.conquestKeepBuildings = ev.value;
         }
 
-        if (ev.type === 'select_mother_planet') {
-            const body = state.planets.find(p => p.name === ev.bodyName)
-                      || state.moons.find(m => m.name === ev.bodyName);
-            const player = state.players.find(p => p.socketId === socketId);
-            if (body && player && Number(body.owner) === Number(player.id)) {
-                const ownedMoons = body.moons ? body.moons.filter(m => m.owner === player.id) : [];
-                if (ownedMoons.length > 0) {
-                    body.isMotherPlanet = true;
-                    body.invincible = true;
-                }
-            }
-        }
-
         if (ev.type === 'spawn_done') {
             const slot = ev.slot !== undefined ? ev.slot : state.players.findIndex(p => p.socketId === socketId);
             if (slot >= 0 && state.players[slot]) state.players[slot]._spawnDone = true;
@@ -122,25 +109,6 @@ if (['growth', 'velocity', 'density'].includes(stat)) {
                 player.multiProgress = 0;
                 player._multiPendingTier = false;
             }
-        }
-
-if (ev.type === 'nidification') {
-            const motherBody = state.planets.find(p => p.name === ev.bodyName)
-                            || state.moons.find(m => m.name === ev.bodyName);
-            if (!motherBody || motherBody._nidCooldown > 0) return;
-            const player = state.players[motherBody.owner];
-            if (!player) return;
-            const allBodies = [...state.planets, ...state.moons]
-                .filter(b => b.owner === player.id && b !== motherBody);
-            let gathered = 0;
-            for (const b of allBodies) {
-                gathered += Math.floor(b.spores);
-                b.spores = 0;
-            }
-            motherBody._nidMaxSpores = motherBody._nidMaxSpores || motherBody.maxSpores;
-            motherBody.maxSpores = Math.max(motherBody.maxSpores, motherBody.spores + gathered + 1000);
-            motherBody.spores = motherBody.spores + gathered;
-            motherBody._nidCooldown = 180;
         }
 
             if (ev.type === 'build_mode') {
@@ -236,14 +204,11 @@ planets: state.planets.map(p => ({
             name:             p.name,
             owner:            p.owner,
             spores:           Math.round((p.spores        || 0) * 10) / 10,
-            sporesAttaque:    Math.round((p.sporesAttaque || 0) * 10) / 10,
-            sporesDefense:    Math.round((p.sporesDefense || 0) * 10) / 10,
             symbiosis:        Math.round(p.symbiosis     || 0),
             nids:             p.nids    || 0,
             biomes:           p.biomes  || 0,
             alveoles:         p.alveoles || 0,
             buildMode:        p.buildMode || 'off',
-            isMotherPlanet:   p.isMotherPlanet || false,
             parasiteSpore:    p.parasiteSpore || 0,
             parasiteProgress: Math.round((p.parasiteProgress || 0) * 10) / 10,
             baseMaxSpores:    p.baseMaxSpores || p.maxSpores,
@@ -416,16 +381,6 @@ function updateSporeGeneration(state, dt) {
             } else {
                 body.buildMode = 'off';
             }
-        } else if (body.buildMode === 'ruche') {
-            const maxAtt = body.maxSpores;
-            if ((body.sporesAttaque || 0) < maxAtt) {
-                body.sporesAttaque = Math.min(maxAtt, (body.sporesAttaque || 0) + rate * 0.5 * dt);
-            }
-        } else if (body.buildMode === 'mare') {
-            const maxDef = body.maxSpores * 2;
-            if ((body.sporesDefense || 0) < maxDef) {
-                body.sporesDefense = Math.min(maxDef, (body.sporesDefense || 0) + rate * 0.5 * dt);
-            }
 // ── Drain parasite ──
         if (body.parasite) {
             const srcBody = body.parasite.sourceBody;
@@ -507,19 +462,8 @@ function applyConquest(state, body, jet) {
         return;
     }
 
-if (body.isMotherPlanet) {
-        const _hasLunes  = body.moons && body.moons.length > 0;
-        const _lunesOwned = !_hasLunes || body.moons.every(m => m.owner === body.owner);
-        if (_lunesOwned) {
-            if (state._io && state._roomId) state._io.to(state._roomId).emit('invincible_hit', { bodyName: body.name, x: body.x, y: body.y, radius: body.radius });
-            return;
-        }
-    }
-
     if (body.owner !== null && body.owner !== jet.owner && _isAllied(jet.owner, body.owner, state.players)) {
-        if (jet.sporeType === 'attaque')       body.sporesAttaque = Math.min(body.maxSpores,     (body.sporesAttaque || 0) + Math.floor(jet.spores));
-        else if (jet.sporeType === 'defense')  body.sporesDefense = Math.min(body.maxSpores * 2, (body.sporesDefense || 0) + Math.floor(jet.spores * 5));
-        else                                   body.spores        = Math.min(body.maxSpores,     (body.spores        || 0) + Math.floor(jet.spores));
+        body.spores = Math.min(body.maxSpores, (body.spores || 0) + Math.floor(jet.spores));
         return;
     }
 
@@ -527,14 +471,9 @@ if (body.isMotherPlanet) {
     let attacking = jet.spores * densityBonus;
 
     if (body.owner === jet.owner) {
-        if (jet.sporeType === 'attaque')       body.sporesAttaque = Math.min(body.maxSpores,     (body.sporesAttaque || 0) + Math.floor(jet.spores));
-        else if (jet.sporeType === 'defense')  body.sporesDefense = Math.min(body.maxSpores * 2, (body.sporesDefense || 0) + Math.floor(jet.spores * 5));
-        else if (body.spores < body.maxSpores) body.spores        = Math.min(body.maxSpores,      body.spores + Math.floor(Math.min(jet.spores, body.maxSpores - body.spores)));
+        if (body.spores < body.maxSpores) body.spores = Math.min(body.maxSpores, body.spores + Math.floor(Math.min(jet.spores, body.maxSpores - body.spores)));
         return;
     }
-
-    if (jet.sporeType === 'attaque')      attacking *= 5;
-    else if (jet.sporeType === 'defense') attacking  = 0;
 
     if (body.faune > 0) {
         const fauneDmg = Math.min(body.faune, attacking);
@@ -556,34 +495,6 @@ if (attacking > 0 && body.spores <= 0) {
         if (oldOwner !== null && state.players[oldOwner]) {
             const arr = state.players[oldOwner].bodies;
             if (arr) { const idx = arr.indexOf(body); if (idx >= 0) arr.splice(idx, 1); }
-        }
-
-        // Vérifier nidification avant de changer owner
-        if (oldOwner !== null && body.type === 'moon') {
-            const conquSun = body.parent?.parent || null;
-            if (conquSun) {
-                for (const planet of conquSun.planets) {
-                    if (planet.isMotherPlanet && planet.owner === oldOwner) {
-                        planet.invincible = false;
-                        const remainingMoons = planet.moons.filter(m => m.owner === oldOwner && m !== body);
-                        if (remainingMoons.length === 0) {
-                            planet.isMotherPlanet = false;
-                            if (planet._nidMaxSpores) {
-                                planet.maxSpores = planet._nidMaxSpores;
-                                planet.spores = Math.min(planet.spores, planet.maxSpores);
-                                planet._nidMaxSpores = null;
-                            }
-                        }
-                        if (conquSun) conquSun._sysCache = null;
-                        if (state._io && state._roomId) state._io.to(state._roomId).emit('build_complete', {
-                            slot: oldOwner,
-                            icon: remainingMoons.length === 0 ? '💔' : '⚠️',
-                            msg: remainingMoons.length === 0 ? `Planète mère perdue : ${planet.name}` : `Planète mère vulnérable : ${planet.name}`,
-                            bodyName: planet.name
-                        });
-                    }
-                }
-            }
         }
 
         body.owner       = jet.owner;
@@ -967,14 +878,6 @@ function launchJet(state, source, dirX, dirY, sporeType) {
         if ((source.parasiteSpore || 0) < 1) return;
         source.parasiteSpore = 0;
         sporeCount = 1;
-    } else if (sporeType === 'attaque') {
-        sporeCount = Math.floor((source.sporesAttaque || 0) * (state.jetRatio || 0.5));
-        if (sporeCount < 5) return;
-        source.sporesAttaque -= sporeCount;
-    } else if (sporeType === 'defense') {
-        sporeCount = Math.floor((source.sporesDefense || 0) * (state.jetRatio || 0.5));
-        if (sporeCount < 5) return;
-        source.sporesDefense -= sporeCount;
     } else {
         sporeCount = Math.floor(source.spores * (state.jetRatio || 0.5));
         if (sporeCount < 5) return;
@@ -983,10 +886,7 @@ function launchJet(state, source, dirX, dirY, sporeType) {
 
     const speed = 20 + player.stats.velocity * 6;
     const traj  = computeTrajectory(state, source.x, source.y, dirX, dirY, speed);
-    const jetColor = sporeType === 'attaque' ? '#EF4444'
-                   : sporeType === 'defense' ? '#38BDF8'
-                   : sporeType === 'parasite' ? '#22C55E'
-                   : player.color;
+    const jetColor = sporeType === 'parasite' ? '#22C55E' : player.color;
 
     state.jets.push({
         id:         ++_jetIdCounter,
