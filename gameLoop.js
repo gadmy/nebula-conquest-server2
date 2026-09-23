@@ -101,21 +101,48 @@ if (ev.type === 'aim_end') {
         }
 
 if (ev.type === 'spawn') {
-            const body   = state.planets.find(p => p.name === ev.bodyName)
-                        || state.moons.find(m => m.name === ev.bodyName);
-            const slot   = ev.fromSlot !== undefined ? ev.fromSlot : ev.slot;
-            const player = state.players[slot];
-    if (body && player) {
-                body.owner  = slot;
-                body.spores = body.maxSpores * 0.5;
-                player.bodies = [body];
-                player.spawnPlanet = body;
-            }
+            /* Le slot etait celui annonce par le client. N'importe qui pouvait
+               donc apparaitre a la place d'un autre, et rien ne verifiait que
+               l'astre vise etait libre : il suffisait d'envoyer cette action
+               pour s'emparer instantanement de la planete de son choix, meme
+               tenue par un adversaire, a n'importe quel moment de la partie.
+               Le slot vient maintenant du socket, et l'astre doit etre libre
+               et etre le premier du joueur. */
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player) return;
+            if (player.spawnPlanet) return;              /* deja apparu */
+            const body = state.planets.find(p => p.name === ev.bodyName)
+                      || state.moons.find(m => m.name === ev.bodyName);
+            if (!body) return;
+            if (body.owner !== null && body.owner !== undefined) return;
+            body.owner  = player.id;
+            body.spores = body.maxSpores * 0.5;
+            player.bodies = [body];
+            player.spawnPlanet = body;
+        }
+
+/* Part des spores envoyees a chaque tir. Elle etait reglee par un curseur
+   cote client qui n'etait jamais transmis : le serveur tirait toujours 50 %
+   tandis que le menu du joueur annonçait la valeur de son curseur. Elle
+   devient aussi une valeur PAR JOUEUR - le serveur n'en gardait qu'une seule
+   pour toute la partie, ce qui n'a pas de sens a plusieurs. */
+if (ev.type === 'set_jet_ratio') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player) return;
+            const v = Number(ev.value);
+            player.jetRatio = isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5;
         }
 
 if (ev.type === 'set_sacrifice') {
             const player = state.players.find(p => p.socketId === socketId);
-            if (player) player.multiSacrifice = ev.value;
+            /* La valeur n'etait pas bornee. La production est multipliee par
+               1 - min(valeur / 100, 0,5) : une valeur NEGATIVE rendait donc ce
+               facteur superieur a 1. Un sacrifice de -900 multipliait la
+               production par dix. */
+            if (player) {
+                const v = Number(ev.value);
+                player.multiSacrifice = (isFinite(v)) ? Math.max(0, Math.min(100, v)) : 0;
+            }
         }
 
 if (ev.type === 'set_conquest_buildings') {
@@ -133,8 +160,13 @@ if (ev.type === 'set_conquest_buildings') {
 if (ev.type === 'multi') {
             const player = state.players.find(p => p.socketId === socketId);
             if (!player) return;
+            /* Il manquait la seule verification qui compte : que le joueur
+               ait vraiment atteint un palier. Sans elle, repeter cette action
+               donnait un point de statistique a chaque envoi - trois
+               statistiques au maximum en quelques secondes, gratuitement. */
+            if (!player._multiPendingTier) return;
             const stat = ev.stat;
-if (['growth', 'velocity', 'density'].includes(stat)) {
+            if (['growth', 'velocity', 'density'].includes(stat)) {
                 if ((player.stats[stat] || 0) < 8) {
                     player.stats[stat] = (player.stats[stat] || 0) + 1;
                 }
@@ -1018,7 +1050,9 @@ function launchJet(state, source, dirX, dirY, sporeType) {
         source.parasiteSpore = 0;
         sporeCount = 1;
     } else {
-        sporeCount = Math.floor(source.spores * (state.jetRatio || 0.5));
+        const _ratio = (player.jetRatio !== undefined) ? player.jetRatio
+                     : (state.jetRatio || 0.5);
+        sporeCount = Math.floor(source.spores * _ratio);
         if (sporeCount < 5) return;
         source.spores -= sporeCount;
     }
