@@ -47,13 +47,22 @@ if (ev.type === 'jet') {
             // Anti-triche : vérifier que le joueur possède bien cette planète
             const player = state.players.find(p => p.socketId === socketId);
             if (!player || src.owner !== player.id) return;
+            /* Si le joueur etait en visee, c'est le lanceur choisi par le
+               serveur qui tire, pas l'astre nomme par le client. */
+            let tireur = src;
+            const vis = player._visee;
+            if (vis && vis.lanceur && vis.lanceur.owner === player.id &&
+                _groupeTir(vis.src).indexOf(vis.lanceur) >= 0) {
+                tireur = vis.lanceur;
+            }
+            player._visee = null;
             const prevCount = state.jets.length;
-            launchJet(state, src, ev.dirX, ev.dirY, ev.sporeType || 'normal');
+            launchJet(state, tireur, ev.dirX, ev.dirY, ev.sporeType || 'normal');
             // Notifier tous les clients pour qu'ils animent le jet localement
             if (state.jets.length > prevCount) {
                 const jet = state.jets[state.jets.length - 1];
 this.io.to(this.roomId).emit('jet_fired', {
-                    srcName:    ev.srcName,
+                    srcName:    tireur.name,
                     dirX:       ev.dirX,
                     dirY:       ev.dirY,
                     sporeType:  ev.sporeType || 'normal',
@@ -65,6 +74,30 @@ this.io.to(this.roomId).emit('jet_fired', {
                     trajectory: jet.trajectory,
                 });
             }
+        }
+
+/* VISEE. Le chargement se joue pendant que le joueur vise, donc le serveur
+   doit savoir ou il vise. Le client envoie sa cible de temps en temps ; c'est
+   le serveur qui en deduit l'astre le plus proche et qui deplace les spores.
+   Le client n'annonce jamais lui-meme quel astre tire ni combien il a charge :
+   il n'y a rien a falsifier. */
+if (ev.type === 'aim') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player) return;
+            const src = state.planets.find(p => p.name === ev.srcName)
+                     || state.moons.find(m => m.name === ev.srcName);
+            if (!src || src.owner !== player.id) { player._visee = null; return; }
+            if (!player._visee || player._visee.src !== src) {
+                player._visee = { src: src, tx: ev.tx, ty: ev.ty, lanceur: null, acc: 0 };
+            } else {
+                player._visee.tx = ev.tx;
+                player._visee.ty = ev.ty;
+            }
+        }
+
+if (ev.type === 'aim_end') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) player._visee = null;
         }
 
 if (ev.type === 'spawn') {
@@ -131,6 +164,7 @@ if (['growth', 'velocity', 'density'].includes(stat)) {
         updateJets(this.state, dt);
         updateComets(this.state, dt);
         updateCleaners(this.state, dt);
+        majChargementTir(this.state, dt);
         if (this._tick % 2 === 0) updateAI(this.state, 50 / 1000);
 
      // Snapshot toutes les 2 ticks = 100ms
@@ -868,6 +902,70 @@ function computeTrajectory(state, startX, startY, dirX, dirY, speed) {
 
 // ─── launchJet (version serveur, sans sons ni sparkles) ───────
 let _jetIdCounter = 0;
+/* ─────────────────────────────────────────────
+   TIR DEPUIS L'ASTRE LE PLUS PROCHE, ET CHARGEMENT
+   Meme regle que le client, mais c'est ici qu'elle fait autorite : pendant
+   qu'un joueur vise, l'astre de son groupe le plus proche de la cible recoit
+   les spores des autres par paquets de 100, et c'est lui qui tirera.
+   Changer de cible remet le chargement a zero sans rien rendre.
+   Le groupe est une planete et SES lunes, toutes tenues par le meme joueur.
+   ───────────────────────────────────────────── */
+const CHARGE_PAQUET = 100;
+const CHARGE_PERIODE = 0.35;
+
+function _groupeTir(src) {
+    if (!src) return [];
+    const planete = (src.type === 'planet') ? src : (src.parent || null);
+    if (!planete || planete.type !== 'planet') return [src];
+    const proprio = src.owner;
+    if (planete.owner !== proprio) return [src];
+    const lunes = planete.moons || [];
+    if (!lunes.length) return [planete];
+    for (let i = 0; i < lunes.length; i++) {
+        if (lunes[i].owner !== proprio) return [src];
+    }
+    return [planete].concat(lunes);
+}
+
+function majChargementTir(state, dt) {
+    const joueurs = state.players || [];
+    for (let j = 0; j < joueurs.length; j++) {
+        const vis = joueurs[j]._visee;
+        if (!vis || !vis.src) continue;
+        if (vis.src.owner !== joueurs[j].id) { joueurs[j]._visee = null; continue; }
+
+        const groupe = _groupeTir(vis.src);
+        let lanceur = vis.src, meilleure = Infinity;
+        for (let i = 0; i < groupe.length; i++) {
+            const b = groupe[i];
+            const dx = vis.tx - b.x, dy = vis.ty - b.y;
+            const d = dx * dx + dy * dy;
+            if (d < meilleure) { meilleure = d; lanceur = b; }
+        }
+        if (lanceur !== vis.lanceur) { vis.lanceur = lanceur; vis.acc = 0; }
+        if (groupe.length < 2) continue;
+
+        vis.acc += dt;
+        while (vis.acc >= CHARGE_PERIODE) {
+            vis.acc -= CHARGE_PERIODE;
+            let place = lanceur.maxSpores - lanceur.spores;
+            if (place <= 1) break;
+            let envoye = 0;
+            for (let i = 0; i < groupe.length && place > 1; i++) {
+                const b = groupe[i];
+                if (b === lanceur) continue;
+                const envoi = Math.min(CHARGE_PAQUET, Math.floor(b.spores), Math.floor(place));
+                if (envoi <= 0) continue;
+                b.spores -= envoi;
+                lanceur.spores += envoi;
+                place -= envoi;
+                envoye += envoi;
+            }
+            if (envoye === 0) break;
+        }
+    }
+}
+
 function launchJet(state, source, dirX, dirY, sporeType) {
     sporeType = sporeType || 'normal';
     const player = state.players[source.owner];
@@ -1123,4 +1221,4 @@ if (roomId.startsWith('ranked-') && state._onRankedManche) {
     }
 }
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState };
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir };
