@@ -377,28 +377,7 @@ function updateSporeGeneration(state, dt) {
 
         const rate = (0.4 + (body.flore / 100) * 0.6) * (1 + player.stats.growth * 0.3) * 2.5 * symBonus * nidBonus * sysBonus;
 
-        if (body.buildMode === 'nid' || body.buildMode === 'biome' || body.buildMode === 'alveole') {
-            const _buildType = body.buildMode;
-            const _costPct = body.buildMode === 'nid' ? 0.15 : body.buildMode === 'alveole' ? 0.10 : 0.20;
-            const _buildCost = Math.floor((body.baseMaxSpores || body.maxSpores) * _costPct);
-            /* Construction immediate : des que l'astre a de quoi payer, le
-               batiment sort. Plus de drain sur huit secondes, donc plus de
-               chantier a moitie fini qu'une attaque pouvait annuler en
-               emportant les spores deja versees. */
-            {
-                if (body.spores >= _buildCost) {
-                    body.spores -= _buildCost;
-                    body.buildProgress = 0;
-                    body.buildMode = 'off';
-                    let _evIcon = '', _evMsg = '';
-                    if (_buildType === 'nid')          { body.nids     = (body.nids     || 0) + 1; _evIcon='🏗️'; _evMsg=`Nid construit sur ${body.name} (×${body.nids})`; }
-                    else if (_buildType === 'alveole') { body.alveoles = (body.alveoles || 0) + 1; body.baseMaxSpores = body.baseMaxSpores || body.maxSpores; _evIcon='🍯'; _evMsg=`Alvéole construite sur ${body.name} (×${body.alveoles})`; }
-                    else                               { body.biomes   = (body.biomes   || 0) + 1; _evIcon='🛡️'; _evMsg=`Biome construit sur ${body.name} (×${body.biomes})`; }
-                    if (bodySun) bodySun._sysCache = null;
-                    if (state._io && state._roomId) state._io.to(state._roomId).emit('build_complete', { slot: body.owner, icon: _evIcon, msg: _evMsg, bodyName: body.name });
-                }
-            }
-        } else if (body.buildMode === 'parasite') {
+        if (body.buildMode === 'parasite') {
             if ((body.parasiteSpore || 0) < 1) {
                 body.parasiteProgress = (body.parasiteProgress || 0) + dt;
                 if (body.parasiteProgress >= 120) {
@@ -448,6 +427,29 @@ function updateSporeGeneration(state, dt) {
             const prodPct  = 1 - totalSac;
             const produced = rate * prodPct * dt;
             body.spores = Math.min(body.maxSpores, (body.spores || 0) + produced);
+
+            /* La construction vient APRES la production, et ne l'interrompt
+               plus. Tant que l'astre n'a pas de quoi payer, il continue a
+               produire et le chantier attend. Auparavant la construction
+               court-circuitait la production : un astre qui n'avait pas les
+               spores restait fige pour toujours, puisqu'il ne pouvait plus en
+               produire pour se les offrir. */
+            if (body.buildMode === 'nid' || body.buildMode === 'biome' || body.buildMode === 'alveole') {
+                const _buildType = body.buildMode;
+                const _costPct = _buildType === 'nid' ? 0.15 : _buildType === 'alveole' ? 0.10 : 0.20;
+                const _buildCost = Math.floor((body.baseMaxSpores || body.maxSpores) * _costPct);
+                if (body.spores >= _buildCost) {
+                    body.spores -= _buildCost;
+                    body.buildProgress = 0;
+                    body.buildMode = 'off';
+                    let _evIcon = '', _evMsg = '';
+                    if (_buildType === 'nid')          { body.nids     = (body.nids     || 0) + 1; _evIcon='🏗️'; _evMsg=`Nid construit sur ${body.name} (×${body.nids})`; }
+                    else if (_buildType === 'alveole') { body.alveoles = (body.alveoles || 0) + 1; body.baseMaxSpores = body.baseMaxSpores || body.maxSpores; _evIcon='🍯'; _evMsg=`Alvéole construite sur ${body.name} (×${body.alveoles})`; }
+                    else                               { body.biomes   = (body.biomes   || 0) + 1; _evIcon='🛡️'; _evMsg=`Biome construit sur ${body.name} (×${body.biomes})`; }
+                    if (bodySun) bodySun._sysCache = null;
+                    if (state._io && state._roomId) state._io.to(state._roomId).emit('build_complete', { slot: body.owner, icon: _evIcon, msg: _evMsg, bodyName: body.name });
+                }
+            }
 
             // Multiplicité
             if (totalSac > 0 && player.multiTier < 10 && !player._multiPendingTier) {
