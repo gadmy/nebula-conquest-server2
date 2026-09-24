@@ -989,6 +989,10 @@ let _jetIdCounter = 0;
    ───────────────────────────────────────────── */
 const CHARGE_PAQUET = 100;
 const CHARGE_PERIODE = 0.35;
+/* La marge que le client ajoute autour de chaque astre pour tracer la
+   frontiere. Reprise ici a l'identique : le serveur doit juger "vise chez
+   lui" exactement comme le client le dessine. */
+const MARGE_FRONTIERE = 26;
 
 function _groupeTir(src) {
     if (!src) return [];
@@ -1004,6 +1008,24 @@ function _groupeTir(src) {
     return [planete].concat(lunes);
 }
 
+/* La cible est-elle DANS la frontiere du groupe qui tire ? Le groupe est une
+   planete et ses lunes : sa frontiere tient dans un cercle centre sur la
+   planete, du rayon de l'orbite lunaire la plus large, plus la marge. Meme
+   calcul, mot pour mot, que dans le client. */
+function _viseeInterne(groupe, x, y) {
+    if (!groupe || groupe.length < 2) return false;
+    const p = groupe[0];
+    let r = p.radius;
+    for (let i = 1; i < groupe.length; i++) {
+        const b = groupe[i];
+        const d = Math.sqrt((b.x - p.x) * (b.x - p.x) + (b.y - p.y) * (b.y - p.y)) + b.radius;
+        if (d > r) r = d;
+    }
+    r += MARGE_FRONTIERE;
+    const dx = x - p.x, dy = y - p.y;
+    return dx * dx + dy * dy <= r * r;
+}
+
 function majChargementTir(state, dt) {
     const joueurs = state.players || [];
     for (let j = 0; j < joueurs.length; j++) {
@@ -1012,12 +1034,21 @@ function majChargementTir(state, dt) {
         if (vis.src.owner !== joueurs[j].id) { joueurs[j]._visee = null; continue; }
 
         const groupe = _groupeTir(vis.src);
-        let lanceur = vis.src, meilleure = Infinity;
-        for (let i = 0; i < groupe.length; i++) {
-            const b = groupe[i];
-            const dx = vis.tx - b.x, dy = vis.ty - b.y;
-            const d = dx * dx + dy * dy;
-            if (d < meilleure) { meilleure = d; lanceur = b; }
+        /* Viser chez soi ne change plus le lanceur : traverser sa propre
+           frontiere pour aller chercher une cible derriere faisait sauter le
+           tir d'une lune a l'autre, et chaque saut remettait la charge a
+           zero. Des que la cible ressort, la bascule reprend. */
+        const interne = _viseeInterne(groupe, vis.tx, vis.ty);
+        let lanceur = vis.lanceur;
+        if (!interne || !lanceur || groupe.indexOf(lanceur) < 0) {
+            lanceur = vis.src;
+            let meilleure = Infinity;
+            for (let i = 0; i < groupe.length; i++) {
+                const b = groupe[i];
+                const dx = vis.tx - b.x, dy = vis.ty - b.y;
+                const d = dx * dx + dy * dy;
+                if (d < meilleure) { meilleure = d; lanceur = b; }
+            }
         }
         if (lanceur !== vis.lanceur) { vis.lanceur = lanceur; vis.acc = 0; }
         if (groupe.length < 2) continue;
@@ -1300,4 +1331,4 @@ if (roomId.startsWith('ranked-') && state._onRankedManche) {
     }
 }
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir };
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne };
