@@ -95,6 +95,21 @@ if (ev.type === 'aim') {
             }
         }
 
+if (ev.type === 'jet_surface') {
+            /* Tir a la surface d'un astre. Le client n'annonce que la cible :
+               le serveur verifie qu'il a bien du terrain la-bas, choisit le
+               point de depart et calcule la cloche lui-meme. */
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player) return;
+            const body = state.planets.find(p => p.name === ev.srcName)
+                      || state.moons.find(m => m.name === ev.srcName);
+            if (!body) return;
+            const tx = +ev.tx, ty = +ev.ty;
+            if (!isFinite(tx) || !isFinite(ty)) return;
+            lancerJetSurface(state, body, player.id, tx, ty);
+            return;
+        }
+
 if (ev.type === 'aim_end') {
             const player = state.players.find(p => p.socketId === socketId);
             if (player) player._visee = null;
@@ -575,7 +590,12 @@ const LUTTE_PAS = 0.2;
 const LUTTE_AVANCE = 5;
 const LUTTE_REMOUS = 0.18;
 const LUTTE_USURE = 0.15;      /* part du stock rongee par seconde au front */
-const LUTTE_FRONT_REF = 54;    /* longueur de front de reference pour cette part */
+const LUTTE_FRONT_REF = 54;
+/* En dessous de ce stock, plus personne n'a de quoi pousser : le front
+   s'endort. Il ne se rendort pas tout seul et ne se reveille pas tout seul
+   non plus - il faut un nouveau debarquement pour relancer le conflit.
+   Chacun continue en revanche de produire sur ce qu'il tient. */
+const LUTTE_SEUIL = 30;    /* longueur de front de reference pour cette part */
 /* Secondes de production comptees dans la pression d'un camp, en plus de son
    stock. Sans ce terme, un camp a sec tombe a une pression nulle et se fait
    balayer jusqu'a la derniere case : le terrain conquis ne resterait jamais.
@@ -632,6 +652,7 @@ function engagerLutte(body, slot, spores, angle) {
     }
     const L = body.lutte;
     L.assaut[slot] = (L.assaut[slot] || 0) + spores;
+    L.dormante = false;      /* un debarquement reveille toujours le front */
     let tient = false;
     for (let i = 0; i < L.cellules.length; i++) if (L.cellules[i] === slot + 1) { tient = true; break; }
     if (!tient) {
@@ -712,6 +733,145 @@ function majOndesSolaires(state, dt) {
     }
 }
 
+
+/* ─────────────────────────────────────────────
+   TIR DE SURFACE (portee du client, mot pour mot)
+   Depuis le terrain qu'on tient sur un astre, on lance des spores en cloche
+   au-dessus de sa surface. Le vol dure d'autant plus longtemps que la cible
+   est loin et part a la vitesse qu'il faut pour l'atteindre en ligne droite,
+   mais une acceleration constante vers le centre le devie en chemin : plus
+   on vise loin, plus il faut corriger. Le trace ne quitte jamais le disque.
+   ───────────────────────────────────────────── */
+const SURFACE_PAS = 0.05;
+const SURFACE_COURBE = 0.16;
+
+function _celluleVers(body, i) {
+    const N = LUTTE_N, r = body.radius, pas = (2 * r) / N;
+    return { x: body.x - r + ((i % N) + 0.5) * pas,
+             y: body.y - r + (((i / N) | 0) + 0.5) * pas };
+}
+function _celluleA(body, wx, wy) {
+    const N = LUTTE_N, r = body.radius, pas = (2 * r) / N;
+    const x = Math.floor((wx - (body.x - r)) / pas);
+    const y = Math.floor((wy - (body.y - r)) / pas);
+    if (x < 0 || x >= N || y < 0 || y >= N) return -1;
+    const i = y * N + x;
+    return (_lutteMasque && _lutteMasque[i]) ? i : -1;
+}
+
+function peutTirerSurface(body, slot) {
+    if (!body || body.type === 'sun') return false;
+    if (body.owner === slot) return true;
+    const L = body.lutte;
+    return !!(L && (L.assaut[slot] || 0) > 0);
+}
+
+function pointTirSurface(body, slot, tx, ty) {
+    const L = body.lutte, r = body.radius;
+    if (!L) {
+        const dx = tx - body.x, dy = ty - body.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        return { x: body.x + dx / d * r * 0.86, y: body.y + dy / d * r * 0.86 };
+    }
+    const v = (slot === body.owner) ? 0 : slot + 1;
+    const cel = L.cellules;
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < cel.length; i++) {
+        if (cel[i] !== v) continue;
+        const p = _celluleVers(body, i);
+        const d = (p.x - tx) * (p.x - tx) + (p.y - ty) * (p.y - ty);
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best < 0 ? { x: body.x, y: body.y } : _celluleVers(body, best);
+}
+
+function trajectoireSurface(body, ox, oy, tx, ty) {
+    const R = body.radius;
+    const px = tx - ox, py = ty - oy;
+    const portee = Math.sqrt(px * px + py * py) || 1;
+    const tVol = Math.max(0.7, Math.min(3.4, 0.55 + portee / (R * 0.85)));
+    const n = Math.max(6, Math.round(tVol / SURFACE_PAS));
+    const a = R * SURFACE_COURBE;
+    let x = ox, y = oy, vx = px / tVol, vy = py / tVol;
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+        const d = Math.sqrt(x * x + y * y) || 1;
+        vx -= x / d * a * SURFACE_PAS;
+        vy -= y / d * a * SURFACE_PAS;
+        x += vx * SURFACE_PAS;
+        y += vy * SURFACE_PAS;
+        const dd = Math.sqrt(x * x + y * y);
+        if (dd > R * 0.97) { x = x / dd * R * 0.97; y = y / dd * R * 0.97; vx *= 0.55; vy *= 0.55; }
+        pts.push({ x: x, y: y });
+    }
+    return pts;
+}
+
+function debarquerSurface(body, slot, spores, wx, wy) {
+    _luttePrepare();
+    const N = LUTTE_N;
+    if (slot === body.owner && !body.lutte) {
+        body.spores = Math.min(body.maxSpores, (body.spores || 0) + spores);
+        return;
+    }
+    if (!body.lutte) {
+        const cel0 = new Uint8Array(N * N);
+        for (let i = 0; i < cel0.length; i++) cel0[i] = _lutteMasque[i] ? 0 : LUTTE_VIDE;
+        body.lutte = { cellules: cel0, assaut: {}, acc: 0 };
+    }
+    const L = body.lutte;
+    L.dormante = false;
+    const v = (slot === body.owner) ? 0 : slot + 1;
+    let centre = _celluleA(body, wx, wy);
+    if (centre < 0) {
+        const dx = wx - body.x, dy = wy - body.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        centre = _celluleA(body, body.x + dx / d * body.radius * 0.8,
+                                 body.y + dy / d * body.radius * 0.8);
+    }
+    if (centre >= 0) {
+        const rayon = Math.min(4.5, 0.7 + Math.sqrt(spores) / 10);
+        const cx = centre % N, cy = (centre / N) | 0;
+        const r2 = rayon * rayon;
+        for (let y = Math.max(0, cy - 5); y <= Math.min(N - 1, cy + 5); y++) {
+            for (let x = Math.max(0, cx - 5); x <= Math.min(N - 1, cx + 5); x++) {
+                if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r2) continue;
+                const i = y * N + x;
+                if (L.cellules[i] === LUTTE_VIDE) continue;
+                L.cellules[i] = v;
+            }
+        }
+    }
+    if (v === 0) body.spores = Math.min(body.maxSpores, (body.spores || 0) + spores);
+    else L.assaut[slot] = (L.assaut[slot] || 0) + spores;
+}
+
+function lancerJetSurface(state, body, slot, tx, ty) {
+    const joueur = state.players[slot];
+    if (!joueur || !peutTirerSurface(body, slot)) return false;
+    const ratio = (joueur.jetRatio !== undefined) ? joueur.jetRatio : (state.jetRatio || 0.5);
+    const dispo = (slot === body.owner) ? body.spores
+                : ((body.lutte && body.lutte.assaut[slot]) || 0);
+    const nb = Math.floor(dispo * ratio);
+    if (nb < 5) return false;
+
+    const p = pointTirSurface(body, slot, tx, ty);
+    if ((tx - p.x) * (tx - p.x) + (ty - p.y) * (ty - p.y) < 1) return false;
+    if (slot === body.owner) body.spores -= nb;
+    else body.lutte.assaut[slot] -= nb;
+
+    const rel = trajectoireSurface(body, p.x - body.x, p.y - body.y,
+                                   tx - body.x, ty - body.y);
+    state.jets.push({
+        id: state._jetId = (state._jetId || 0) + 1,
+        owner: slot, color: joueur.color, spores: nb, sporeType: 'normal',
+        trajectory: rel, posIndex: 0, x: p.x, y: p.y,
+        speed: 1 / (0.70 * SURFACE_PAS),
+        alive: true, age: 0, source: body, sourceName: body.name, _surface: body
+    });
+    return true;
+}
+
 function majLuttes(state, dt) {
     const bodies = state.allBodies || [];
     for (let bi = 0; bi < bodies.length; bi++) {
@@ -754,6 +914,10 @@ function majLutte(state, body, pas) {
             _luttePression[v] = (L.assaut[sl] + deb * LUTTE_FENETRE) / n;
         }
     }
+
+    /* Front endormi : chacun produit sur ce qu'il tient, mais plus rien ne
+       bouge et personne ne s'use. Il faut un nouveau debarquement. */
+    if (L.dormante) return;
 
     _lutteTampon.set(cel);
     _lutteUsure.fill(0);
@@ -822,12 +986,14 @@ function majLutte(state, body, pas) {
         delete L.assaut[sl];
     }
 
-    let vainqueur = -1, meilleur = 0;
+    let vainqueur = -1, meilleur = 0, plusGrosStock = neutre ? 0 : body.spores;
     for (const k in L.assaut) {
         const v = (+k) + 1;
         if (_lutteCompte[v] > meilleur) { meilleur = _lutteCompte[v]; vainqueur = +k; }
+        if (L.assaut[k] > plusGrosStock) plusGrosStock = L.assaut[k];
     }
     if (vainqueur < 0) { body.lutte = null; return; }
+    if (plusGrosStock < LUTTE_SEUIL) L.dormante = true;
 
     /* L'astre ne tombe qu'au dernier pouce de sol : un defenseur a sec n'est
        plus mis en deroute, il peut repartir de ce qu'il tient. */
@@ -1116,10 +1282,24 @@ function updateJets(state, dt) {
         } else {
             jet.posIndex += jet.speed * dt * 0.70;
             const idx = Math.floor(jet.posIndex);
-            if (idx >= jet.trajectory.length - 1) { jet.alive = false; continue; }
+            if (idx >= jet.trajectory.length - 1) {
+                /* Un tir de surface arrive au bout de sa cloche : il se pose. */
+                if (jet._surface) {
+                    const fin = jet.trajectory[jet.trajectory.length - 1];
+                    debarquerSurface(jet._surface, jet.owner, jet.spores,
+                                     jet._surface.x + fin.x, jet._surface.y + fin.y);
+                }
+                jet.alive = false; continue;
+            }
             const pt = jet.trajectory[idx];
-            jet.x = pt.x;
-            jet.y = pt.y;
+            if (jet._surface) {
+                /* Trajectoire gardee dans le repere de l'astre, qui orbite. */
+                jet.x = jet._surface.x + pt.x;
+                jet.y = jet._surface.y + pt.y;
+            } else {
+                jet.x = pt.x;
+                jet.y = pt.y;
+            }
         }
 
         // Tête chercheuse (homing)
@@ -1676,4 +1856,5 @@ if (roomId.startsWith('ranked-') && state._onRankedManche) {
     }
 }
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque, engagerLutte, majLuttes, conquerir, _resumeLutte, majOndesSolaires };
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque, engagerLutte, majLuttes, conquerir, _resumeLutte, majOndesSolaires,
+    lancerJetSurface, debarquerSurface, peutTirerSurface };
