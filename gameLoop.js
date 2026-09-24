@@ -494,8 +494,9 @@ function updateSporeGeneration(state, dt) {
 
         /* Rendement maximal a mi-capacite : un astre presque vide ou plein
            produit peu. C'est la courbe de croissance. */
-        const rate = (0.4 + (body.flore / 100) * 0.6) * (1 + player.stats.growth * 0.3)
-                   * 2.5 * symBonus * nidBonus * sysBonus
+        const rate = Math.max(1, body.maxSpores) * TAUX_PROD
+                   * (0.4 + (body.flore / 100) * 0.6) * (1 + player.stats.growth * 0.3)
+                   * symBonus * nidBonus * sysBonus
                    * courbeCroissance(body.spores / Math.max(1, body.maxSpores));
 
         if (body.buildMode === 'parasite') {
@@ -618,11 +619,35 @@ function coutCase(body, total) {
     return Math.max(1, (body.maxSpores || 1) / Math.max(1, total));
 }
 
-/* COURBE DE CROISSANCE : rendement maximal a mi-capacite. */
+/* LE RENDEMENT DE BASE, en part de la CAPACITE par seconde. C'etait un
+   nombre fixe de spores, 2,5, sans rapport avec la taille de l'astre : une
+   geante de vingt mille mettait des heures a se remplir au meme rythme qu'une
+   lune de quatre cents, et tout le monde stagnait faute de pouvoir accumuler
+   de quoi relancer une attaque. En part de capacite, un astre se remplit dans
+   un temps qui ne depend plus de sa taille : vingt-cinq pour cent en une
+   minute et demie, le grand pic de la courbe en moins de quatre minutes.
+   Consequence heureuse : une alveole, qui agrandit le plafond, augmente
+   desormais aussi la production - un plus grand silo nourrit plus de monde. */
+const TAUX_PROD = 0.006;
+
+/* COURBE DE PRODUCTION. Deux regimes plutot qu'un seul sommet : une bosse
+   modeste au quart de la capacite, un creux a mi-chemin, un PIC franc aux
+   sept dixiemes, puis l'extinction quand la zone sature - une population qui
+   n'a plus de place ne se reproduit plus. Il y a donc deux rendements a
+   connaitre : le petit, precoce et facile a tenir, et le gros, qui demande de
+   rester juste sous le plafond au risque qu'un renfort vous y pousse et vous
+   coupe tout. Le creux central, lui, punit qui reste a moitie plein.
+
+   La courbe multiplie le reste - flore, growth, symbiose, nids, systeme
+   complet, sacrifice - qui continuent donc de compter exactement pareil.
+   Le pic vaut 1 : la valeur de crete est divisee pour cela. */
 function courbeCroissance(part) {
-    if (!(part > 0)) return 0.35;
+    if (!(part > 0)) part = 0;
     if (part >= 1) return 0;
-    return Math.max(0.35 * (1 - part), 4 * part * (1 - part));
+    const a = (part - 0.25) / 0.13;
+    const b = (part - 0.70) / 0.10;
+    return (0.20 + 0.32 * Math.exp(-a * a) + 0.80 * Math.exp(-b * b))
+           * (1 - Math.pow(part, 8)) / 0.9437;
 }
 
 let _lutteMasque = null, _lutteVoisins = null, _lutteVoisins8 = null;
@@ -668,8 +693,9 @@ function debitPour(state, body, slot) {
     const soleil = body.type === 'planet' ? body.parent : (body.parent ? body.parent.parent : null);
     const sys = (soleil && isSystemComplete(soleil, slot)) ? 1.03 : 1;
     const part = 1 - Math.min((joueur.multiSacrifice || 0) / 100, 0.5);
-    return (0.4 + (body.flore / 100) * 0.6) * (1 + joueur.stats.growth * 0.3)
-           * 2.5 * sym * nid * sys * part;
+    return Math.max(1, body.maxSpores) * TAUX_PROD
+           * (0.4 + (body.flore / 100) * 0.6) * (1 + joueur.stats.growth * 0.3)
+           * sym * nid * sys * part;
 }
 
 /* OUVRIR UNE BATAILLE sur un astre qui n'en avait pas. Le defenseur y entre
