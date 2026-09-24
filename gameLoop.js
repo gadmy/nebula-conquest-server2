@@ -44,9 +44,13 @@ if (ev.type === 'jet') {
             const src = state.planets.find(p => p.name === ev.srcName)
                      || state.moons.find(m => m.name === ev.srcName);
             if (!src) return;
-            // Anti-triche : vérifier que le joueur possède bien cette planète
+            /* Anti-triche : le joueur doit posseder l'astre, ou au moins y
+               tenir du terrain - un astre a moitie conquis peut envoyer des
+               spores ailleurs depuis le pied-a-terre qu'on y a. */
             const player = state.players.find(p => p.socketId === socketId);
-            if (!player || src.owner !== player.id) return;
+            if (!player) return;
+            const _chezLui = (src.owner === player.id);
+            if (!_chezLui && !(src.lutte && (src.lutte.assaut[player.id] || 0) > 0)) return;
             /* Si le joueur etait en visee, c'est le lanceur choisi par le
                serveur qui tire, pas l'astre nomme par le client. */
             let tireur = src;
@@ -57,7 +61,7 @@ if (ev.type === 'jet') {
             }
             player._visee = null;
             const prevCount = state.jets.length;
-            launchJet(state, tireur, ev.dirX, ev.dirY, ev.sporeType || 'normal');
+            launchJet(state, tireur, ev.dirX, ev.dirY, ev.sporeType || 'normal', player.id);
             // Notifier tous les clients pour qu'ils animent le jet localement
             if (state.jets.length > prevCount) {
                 const jet = state.jets[state.jets.length - 1];
@@ -161,6 +165,8 @@ if (ev.type === 'set_sacrifice') {
         }
 
 if (ev.type === 'set_conquest_buildings') {
+            /* Conserve pour les clients d'avant : les batiments survivent
+               desormais toujours a la conquete, le reglage n'a plus d'effet. */
             const player = state.players.find(p => p.socketId === socketId);
             if (player) player.conquestKeepBuildings = ev.value;
         }
@@ -195,8 +201,14 @@ if (ev.type === 'multi') {
             const body = state.planets.find(p => p.name === ev.bodyName)
                       || state.moons.find(m => m.name === ev.bodyName);
             const player = state.players.find(p => p.socketId === socketId);
-            if (body && player && Number(body.owner) === Number(player.id)) {
+            /* On batit chez soi, mais aussi sur le bout de sol qu'on tient
+               chez l'autre : une tete de pont est un territoire comme un
+               autre. Le serveur verifie donc l'un ou l'autre. */
+            const _chez = body && player && Number(body.owner) === Number(player.id);
+            const _pied = body && player && body.lutte && (body.lutte.assaut[player.id] || 0) > 0;
+            if (_chez || _pied) {
                 body.buildMode = ev.mode || 'off';
+                body.buildSlot = player.id;
                 body.buildProgress = 0;
             }
         }
@@ -550,10 +562,12 @@ function updateSporeGeneration(state, dt) {
                     body.spores -= _buildCost;
                     body.buildProgress = 0;
                     body.buildMode = 'off';
-                    let _evIcon = '', _evMsg = '';
-                    if (_buildType === 'nid')          { body.nids     = (body.nids     || 0) + 1; _evIcon='🏗️'; _evMsg=`Nid construit sur ${body.name} (×${body.nids})`; }
-                    else if (_buildType === 'alveole') { body.alveoles = (body.alveoles || 0) + 1; body.baseMaxSpores = body.baseMaxSpores || body.maxSpores; _evIcon='🍯'; _evMsg=`Alvéole construite sur ${body.name} (×${body.alveoles})`; }
-                    else                               { body.biomes   = (body.biomes   || 0) + 1; _evIcon='🛡️'; _evMsg=`Biome construit sur ${body.name} (×${body.biomes})`; }
+                    if (_buildType === 'alveole') body.baseMaxSpores = body.baseMaxSpores || body.maxSpores;
+                    poserEdifice(state, body, _buildType, 0);
+                    const _sg = { nid: ['🏗️', 'Nid construit', body.nids],
+                                  alveole: ['🍯', 'Alvéole construite', body.alveoles],
+                                  biome: ['🛡️', 'Biome construit', body.biomes] }[_buildType];
+                    const _evIcon = _sg[0], _evMsg = `${_sg[1]} sur ${body.name} (×${_sg[2]})`;
                     if (bodySun) bodySun._sysCache = null;
                     if (state._io && state._roomId) state._io.to(state._roomId).emit('build_complete', { slot: body.owner, icon: _evIcon, msg: _evMsg, bodyName: body.name });
                 }
@@ -648,7 +662,9 @@ function debitPour(state, body, slot) {
     const joueur = state.players[slot];
     if (!joueur || !joueur.stats) return 0;
     const sym = 1 + ((body.symbiosis || 0) / 100) * (body.type === 'planet' ? 0.20 : 0.10);
-    const nid = 1 + bonusBatiment(body.nids || 0, 'nid');
+    /* Seuls comptent les nids qu'on tient : sur un astre partage, ceux de
+       l'autre cote de la frontiere travaillent pour l'autre. */
+    const nid = 1 + bonusBatiment(nbBatimentCamp(state, body, 'nid', campDe(body, slot)), 'nid');
     const soleil = body.type === 'planet' ? body.parent : (body.parent ? body.parent.parent : null);
     const sys = (soleil && isSystemComplete(soleil, slot)) ? 1.03 : 1;
     const part = 1 - Math.min((joueur.multiSacrifice || 0) / 100, 0.5);
@@ -665,25 +681,29 @@ function engagerLutte(body, slot, spores, angle) {
         body.lutte = { cellules: cel, assaut: {}, acc: 0 };
     }
     const L = body.lutte;
-    L.assaut[slot] = (L.assaut[slot] || 0) + spores;
-    /* Les spores qui debarquent sont engagees dans l'assaut : c'est cet elan
-       qui achete du sol, case par case, jusqu'a epuisement. */
-    if (!L.elan) L.elan = {};
-    L.elan[slot + 1] = (L.elan[slot + 1] || 0) + spores;
-    L.dormante = false;
-    let tient = false;
-    for (let i = 0; i < L.cellules.length; i++) if (L.cellules[i] === slot + 1) { tient = true; break; }
-    if (!tient) {
-        const c = (N - 1) / 2;
-        for (let k = 0; k <= N; k++) {
-            const rr = (N / 2 - 1) - k;
-            if (rr < 0) break;
-            const bx = Math.round(c + Math.cos(angle) * rr);
-            const by = Math.round(c + Math.sin(angle) * rr);
-            const i = by * N + bx;
-            if (bx >= 0 && bx < N && by >= 0 && by < N && _lutteMasque[i]) { L.cellules[i] = slot + 1; break; }
-        }
+    const v = slot + 1;
+
+    /* CHAQUE TIR OUVRE SON PROPRE FRONT, a l'endroit ou il touche. Deux
+       attaques sur la meme planete ne grossissent donc pas la meme tache :
+       elles en font deux, qui s'etalent chacune de leur cote. Les spores ne
+       renforcent une tache existante que si le tir retombe SUR du terrain
+       deja tenu - exactement comme le tir de surface. */
+    let tete = -1;
+    const c = (N - 1) / 2;
+    for (let k = 0; k <= N; k++) {
+        const rr = (N / 2 - 1) - k;
+        if (rr < 0) break;
+        const bx = Math.round(c + Math.cos(angle) * rr);
+        const by = Math.round(c + Math.sin(angle) * rr);
+        const i = by * N + bx;
+        if (bx >= 0 && bx < N && by >= 0 && by < N && _lutteMasque[i]) { tete = i; break; }
     }
+    if (tete >= 0 && L.cellules[tete] !== v) L.cellules[tete] = v;
+
+    L.assaut[slot] = (L.assaut[slot] || 0) + spores;
+    if (!L.elan) L.elan = {};
+    L.elan[v] = (L.elan[v] || 0) + spores;
+    L.dormante = false;
 }
 
 /* ─────────────────────────────────────────────
@@ -895,6 +915,70 @@ function lancerJetSurface(state, body, slot, tx, ty) {
     return true;
 }
 
+/* ─────────────────────────────────────────────
+   LES BATIMENTS SONT POSES SUR LE SOL
+   Un batiment occupe une case de la surface : on le voit ou il est, et quand
+   la frontiere passe dessus il change de mains avec le terrain. Les compteurs
+   restent la somme, pour tout ce qui lit deja un bonus ; la liste dit ou ils
+   sont et a qui ils appartiennent.
+   ───────────────────────────────────────────── */
+function _caseLibre(state, body, v) {
+    _luttePrepare();
+    const N = LUTTE_N;
+    const cel = body.lutte ? body.lutte.cellules : null;
+    const pris = {};
+    const liste = body.edifices || [];
+    for (let k = 0; k < liste.length; k++) pris[liste[k].i] = 1;
+    const libres = [];
+    for (let i = 0; i < N * N; i++) {
+        if (!_lutteMasque[i] || pris[i]) continue;
+        if (v !== null && cel && cel[i] !== v) continue;
+        libres.push(i);
+    }
+    if (!libres.length) return -1;
+    const alea = state._gameRng || Math.random;
+    return libres[Math.floor(alea() * libres.length)];
+}
+
+function edifices(state, body) {
+    if (body.edifices) return body.edifices;
+    body.edifices = [];
+    const genres = [['alveole', body.alveoles || 0], ['nid', body.nids || 0], ['biome', body.biomes || 0]];
+    for (let g = 0; g < genres.length; g++) {
+        for (let k = 0; k < genres[g][1]; k++) {
+            const i = _caseLibre(state, body, null);
+            if (i >= 0) body.edifices.push({ g: genres[g][0], i: i });
+        }
+    }
+    return body.edifices;
+}
+
+function poserEdifice(state, body, genre, v) {
+    const liste = edifices(state, body);
+    const i = _caseLibre(state, body, (body.lutte && v !== undefined) ? v : null);
+    if (i >= 0) liste.push({ g: genre, i: i });
+    if (genre === 'nid') body.nids = (body.nids || 0) + 1;
+    else if (genre === 'alveole') body.alveoles = (body.alveoles || 0) + 1;
+    else body.biomes = (body.biomes || 0) + 1;
+}
+
+function nbBatimentCamp(state, body, genre, v) {
+    const cle = genre === 'nid' ? 'nids' : genre === 'alveole' ? 'alveoles' : 'biomes';
+    if (!body.lutte) return body[cle] || 0;
+    const liste = edifices(state, body);
+    const cel = body.lutte.cellules;
+    let n = 0;
+    for (let k = 0; k < liste.length; k++) {
+        if (liste[k].g !== genre) continue;
+        if (cel[liste[k].i] === v) n++;
+    }
+    return n;
+}
+
+function campDe(body, slot) {
+    return (body.owner === slot) ? 0 : slot + 1;
+}
+
 function majLuttes(state, dt) {
     const bodies = state.allBodies || [];
     for (let bi = 0; bi < bodies.length; bi++) {
@@ -975,6 +1059,25 @@ function majLutte(state, body, pas) {
             const deb = debitPour(state, body, sl) * (n / total)
                       * courbeCroissance(stock / Math.max(1, plafond));
             if (stock < plafond) L.assaut[sl] = Math.min(plafond, stock + deb * pas);
+        }
+    }
+
+    /* Le chantier d'un astre partage : updateSporeGeneration ne passe plus
+       par la, c'est donc ici qu'il aboutit, paye par la reserve du camp qui
+       l'a demande et pose sur le sol de ce camp. */
+    if (body.buildMode === 'nid' || body.buildMode === 'biome' || body.buildMode === 'alveole') {
+        const bs = (body.buildSlot !== undefined) ? body.buildSlot : body.owner;
+        const bv = campDe(body, bs);
+        if (_lutteCompte[bv] > 0) {
+            const prixB = coutBatiment(body, body.buildMode);
+            const caisse = (bv === 0) ? (neutre ? 0 : body.spores) : (L.assaut[bs] || 0);
+            if (caisse >= prixB) {
+                if (bv === 0) body.spores -= prixB; else L.assaut[bs] -= prixB;
+                if (body.buildMode === 'alveole') body.baseMaxSpores = body.baseMaxSpores || body.maxSpores;
+                poserEdifice(state, body, body.buildMode, bv);
+                body.buildMode = 'off';
+                body.buildProgress = 0;
+            }
         }
     }
 
@@ -1087,13 +1190,8 @@ function conquerir(state, body, nouveauProprio, sporesArrivees) {
     body.buildMode   = 'off';
     const _conquSun  = body.type === 'planet' ? body.parent : (body.parent?.parent || null);
     if (_conquSun) _conquSun._sysCache = null;
-    const _keepBuildings = state.players[jet.owner]?.conquestKeepBuildings || false;
-    if (!_keepBuildings) {
-        body.nids    = 0;
-        body.biomes  = 0;
-        body.alveoles = 0;
-        body.maxSpores = body.baseMaxSpores || body.maxSpores;
-    }
+    /* Les batiments restent : ils sont poses sur le sol, et qui prend le sol
+       prend ce qui est dessus. */
     if (state.players[jet.owner]?.bodies) state.players[jet.owner].bodies.push(body);
     if (oldOwner === null) {
         const _vb = body.type === 'planet' ? 500 : 250;
@@ -1151,7 +1249,11 @@ function applyConquest(state, body, jet) {
         attacking   -= fauneDmg;
     }
 
-    const biomeDefense = 1 + bonusBatiment(body.biomes || 0, 'biome');
+    /* Les biomes qui defendent sont ceux que l'assaillant NE tient PAS. */
+    const _bioDef = body.lutte
+        ? (body.biomes || 0) - nbBatimentCamp(state, body, 'biome', campDe(body, jet.owner))
+        : (body.biomes || 0);
+    const biomeDefense = 1 + bonusBatiment(Math.max(0, _bioDef), 'biome');
     attacking = attacking / biomeDefense;
 
     /* Les spores qui restent debarquent et se battent pour la surface. */
@@ -1650,22 +1752,30 @@ function majChargementTir(state, dt) {
     }
 }
 
-function launchJet(state, source, dirX, dirY, sporeType) {
+/* Le tireur n'est pas forcement le proprietaire : on peut lancer depuis la
+   tete de pont qu'on tient sur la planete de quelqu'un d'autre. */
+function launchJet(state, source, dirX, dirY, sporeType, slot) {
     sporeType = sporeType || 'normal';
-    const player = state.players[source.owner];
+    const tireur = (slot === undefined || slot === null) ? source.owner : slot;
+    const player = state.players[tireur];
     if (!player) return;
+    const chezSoi = (source.owner === tireur);
+    if (!chezSoi && !(source.lutte && (source.lutte.assaut[tireur] || 0) > 0)) return;
 
     let sporeCount;
     if (sporeType === 'parasite') {
+        if (!chezSoi) return;
         if ((source.parasiteSpore || 0) < 1) return;
         source.parasiteSpore = 0;
         sporeCount = 1;
     } else {
         const _ratio = (player.jetRatio !== undefined) ? player.jetRatio
                      : (state.jetRatio || 0.5);
-        sporeCount = Math.floor(source.spores * _ratio);
+        const reserve = chezSoi ? source.spores : source.lutte.assaut[tireur];
+        sporeCount = Math.floor(reserve * _ratio);
         if (sporeCount < 5) return;
-        source.spores -= sporeCount;
+        if (chezSoi) source.spores -= sporeCount;
+        else source.lutte.assaut[tireur] -= sporeCount;
     }
 
     const speed = 20 + player.stats.velocity * 6;
@@ -1674,7 +1784,7 @@ function launchJet(state, source, dirX, dirY, sporeType) {
 
     state.jets.push({
         id:         ++_jetIdCounter,
-        owner:      source.owner,
+        owner:      tireur,
         color:      jetColor,
         spores:     sporeCount,
         sporeType:  sporeType,
