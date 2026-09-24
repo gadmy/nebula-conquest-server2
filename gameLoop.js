@@ -50,7 +50,7 @@ if (ev.type === 'jet') {
             const player = state.players.find(p => p.socketId === socketId);
             if (!player) return;
             const _chezLui = (src.owner === player.id);
-            if (!_chezLui && !(src.lutte && (src.lutte.assaut[player.id] || 0) > 0)) return;
+            if (!_chezLui && !(src.lutte && zonesDe(src, player.id).length)) return;
             /* Si le joueur etait en visee, c'est le lanceur choisi par le
                serveur qui tire, pas l'astre nomme par le client. */
             let tireur = src;
@@ -61,7 +61,7 @@ if (ev.type === 'jet') {
             }
             player._visee = null;
             const prevCount = state.jets.length;
-            launchJet(state, tireur, ev.dirX, ev.dirY, ev.sporeType || 'normal', player.id);
+            launchJet(state, tireur, ev.dirX, ev.dirY, ev.sporeType || 'normal', player.id, ev.zx, ev.zy);
             // Notifier tous les clients pour qu'ils animent le jet localement
             if (state.jets.length > prevCount) {
                 const jet = state.jets[state.jets.length - 1];
@@ -110,7 +110,7 @@ if (ev.type === 'jet_surface') {
             if (!body) return;
             const tx = +ev.tx, ty = +ev.ty;
             if (!isFinite(tx) || !isFinite(ty)) return;
-            lancerJetSurface(state, body, player.id, tx, ty);
+            lancerJetSurface(state, body, player.id, tx, ty, ev.zx, ev.zy);
             return;
         }
 
@@ -205,7 +205,7 @@ if (ev.type === 'multi') {
                chez l'autre : une tete de pont est un territoire comme un
                autre. Le serveur verifie donc l'un ou l'autre. */
             const _chez = body && player && Number(body.owner) === Number(player.id);
-            const _pied = body && player && body.lutte && (body.lutte.assaut[player.id] || 0) > 0;
+            const _pied = body && player && body.lutte && zonesDe(body, player.id).length > 0;
             if (_chez || _pied) {
                 body.buildMode = ev.mode || 'off';
                 body.buildSlot = player.id;
@@ -672,14 +672,29 @@ function debitPour(state, body, slot) {
            * 2.5 * sym * nid * sys * part;
 }
 
+/* OUVRIR UNE BATAILLE sur un astre qui n'en avait pas. Le defenseur y entre
+   avec ses spores, versees dans la zone unique qui couvre alors tout le
+   disque : sans ce versement, declencher un combat effacerait la reserve de
+   celui qu'on attaque. */
+function naitreLutte(body) {
+    if (body.lutte) return body.lutte;
+    _luttePrepare();
+    const N = LUTTE_N;
+    const cel = new Uint8Array(N * N);
+    for (let i = 0; i < cel.length; i++) cel[i] = _lutteMasque[i] ? 0 : LUTTE_VIDE;
+    body.lutte = { cellules: cel, assaut: {}, acc: 0 };
+    zonesRecalculer(body, body.lutte);
+    const garnison = body.spores || 0;
+    for (const id in body.lutte.zones) {
+        if (body.lutte.zones[id].v === 0) body.lutte.zones[id].spores = garnison;
+    }
+    return body.lutte;
+}
+
 function engagerLutte(body, slot, spores, angle) {
     _luttePrepare();
     const N = LUTTE_N;
-    if (!body.lutte) {
-        const cel = new Uint8Array(N * N);
-        for (let i = 0; i < cel.length; i++) cel[i] = _lutteMasque[i] ? 0 : LUTTE_VIDE;
-        body.lutte = { cellules: cel, assaut: {}, acc: 0 };
-    }
+    naitreLutte(body);
     const L = body.lutte;
     const v = slot + 1;
 
@@ -698,11 +713,14 @@ function engagerLutte(body, slot, spores, angle) {
         const i = by * N + bx;
         if (bx >= 0 && bx < N && by >= 0 && by < N && _lutteMasque[i]) { tete = i; break; }
     }
-    if (tete >= 0 && L.cellules[tete] !== v) L.cellules[tete] = v;
-
-    L.assaut[slot] = (L.assaut[slot] || 0) + spores;
-    if (!L.elan) L.elan = {};
-    L.elan[v] = (L.elan[v] || 0) + spores;
+    if (!L.zid) zonesRecalculer(body, L);
+    if (tete >= 0 && L.cellules[tete] !== v) { L.cellules[tete] = v; L.zid[tete] = 0; }
+    /* Les spores vont a la ZONE touchee : un tir sur son propre terrain
+       renforce la tache dessous, ailleurs il en ouvre une nouvelle. */
+    zonesRecalculer(body, L);
+    const zt = L.zones[(tete >= 0) ? L.zid[tete] : 0];
+    if (zt) { zt.spores += spores; zt.elan = (zt.elan || 0) + spores; }
+    zonesAgreger(body, L);
     L.dormante = false;
 }
 
@@ -801,7 +819,8 @@ function peutTirerSurface(body, slot) {
     if (!body || body.type === 'sun') return false;
     if (body.owner === slot) return true;
     const L = body.lutte;
-    return !!(L && (L.assaut[slot] || 0) > 0);
+    /* Tenir du terrain suffit : une zone a court de spores reste une zone. */
+    return !!(L && zonesDe(body, slot).length);
 }
 
 function pointTirSurface(body, slot, tx, ty) {
@@ -811,11 +830,12 @@ function pointTirSurface(body, slot, tx, ty) {
         const d = Math.sqrt(dx * dx + dy * dy) || 1;
         return { x: body.x + dx / d * r * 0.86, y: body.y + dy / d * r * 0.86 };
     }
-    const v = (slot === body.owner) ? 0 : slot + 1;
+    const zt = zoneDeTir(body, slot);
+    const idz = zt ? zt.id : -1;
     const cel = L.cellules;
     let best = -1, bd = Infinity;
     for (let i = 0; i < cel.length; i++) {
-        if (cel[i] !== v) continue;
+        if (L.zid[i] !== idz) continue;
         const p = _celluleVers(body, i);
         const d = (p.x - tx) * (p.x - tx) + (p.y - ty) * (p.y - ty);
         if (d < bd) { bd = d; best = i; }
@@ -855,11 +875,7 @@ function debarquerSurface(body, slot, spores, wx, wy) {
         body.spores = Math.min(body.maxSpores, (body.spores || 0) + spores);
         return;
     }
-    if (!body.lutte) {
-        const cel0 = new Uint8Array(N * N);
-        for (let i = 0; i < cel0.length; i++) cel0[i] = _lutteMasque[i] ? 0 : LUTTE_VIDE;
-        body.lutte = { cellules: cel0, assaut: {}, acc: 0 };
-    }
+    naitreLutte(body);
     const L = body.lutte;
     L.dormante = false;
     const v = (slot === body.owner) ? 0 : slot + 1;
@@ -883,25 +899,27 @@ function debarquerSurface(body, slot, spores, wx, wy) {
             }
         }
     }
-    if (v === 0) body.spores = Math.min(body.maxSpores, (body.spores || 0) + spores);
-    else L.assaut[slot] = (L.assaut[slot] || 0) + spores;
-    if (!L.elan) L.elan = {};
-    L.elan[v] = (L.elan[v] || 0) + spores;
+    /* Les spores vont a la zone du point de chute. */
+    zonesRecalculer(body, L);
+    const zc = L.zones[(centre >= 0) ? L.zid[centre] : 0];
+    if (zc) { zc.spores += spores; zc.elan = (zc.elan || 0) + spores; }
+    zonesAgreger(body, L);
+    L.dormante = false;
 }
 
-function lancerJetSurface(state, body, slot, tx, ty) {
+function lancerJetSurface(state, body, slot, tx, ty, zx, zy) {
     const joueur = state.players[slot];
     if (!joueur || !peutTirerSurface(body, slot)) return false;
     const ratio = (joueur.jetRatio !== undefined) ? joueur.jetRatio : (state.jetRatio || 0.5);
-    const dispo = (slot === body.owner) ? body.spores
-                : ((body.lutte && body.lutte.assaut[slot]) || 0);
-    const nb = Math.floor(dispo * ratio);
+    const zt = body.lutte ? zoneDeTir(body, slot, zx, zy) : null;
+    if (body.lutte && (!zt || zt.z.n < ZONE_MIN)) return false;
+    const nb = Math.floor((zt ? zt.z.spores : body.spores) * ratio);
     if (nb < 5) return false;
 
     const p = pointTirSurface(body, slot, tx, ty);
     if ((tx - p.x) * (tx - p.x) + (ty - p.y) * (ty - p.y) < 1) return false;
-    if (slot === body.owner) body.spores -= nb;
-    else body.lutte.assaut[slot] -= nb;
+    if (zt) { zt.z.spores -= nb; zonesAgreger(body, body.lutte); }
+    else body.spores -= nb;
 
     const rel = trajectoireSurface(body, p.x - body.x, p.y - body.y,
                                    tx - body.x, ty - body.y);
@@ -994,24 +1012,155 @@ function majLuttes(state, dt) {
     }
 }
 
-function _frontDe(L, v, sortie) {
+/* ─────────────────────────────────────────────
+   LES ZONES (portee du client, mot pour mot)
+   Une tache de couleur est une ZONE, avec ses spores a elle et son propre
+   rendement. L.zid donne pour chaque case le numero de sa zone ; a chaque
+   tour on refait les composantes connexes, une composante reprenant le numero
+   le plus represente parmi ses cases. Deux zones soudees mettent leurs spores
+   ensemble, une zone coupee les partage au prorata des cases. Perdre du sol,
+   c'est perdre les spores qui etaient dessus.
+   ───────────────────────────────────────────── */
+const ZONE_MIN = 10;
+const ZONE_FONTE = 0.5;
+const _zoneMarque = new Int16Array(LUTTE_N * LUTTE_N);
+const _zonePile = [];
+
+function _zidNeuf(zones) {
+    for (let id = 1; id < 255; id++) if (!zones[id]) return id;
+    return 0;
+}
+
+function zonesRecalculer(body, L) {
+    const nb = L.cellules.length, cel = L.cellules;
+    if (!L.zid) L.zid = new Uint8Array(nb);
+    if (!L.zones) L.zones = {};
+    const zid = L.zid, anciennes = L.zones;
+    _zoneMarque.fill(0);
+
+    const compos = [];
+    for (let i = 0; i < nb; i++) {
+        if (cel[i] === LUTTE_VIDE || _zoneMarque[i]) continue;
+        const v = cel[i];
+        const comp = { v: v, cases: [], anciens: {} };
+        compos.push(comp);
+        const m = compos.length;
+        _zonePile.length = 0; _zonePile.push(i); _zoneMarque[i] = m;
+        while (_zonePile.length) {
+            const j = _zonePile.pop();
+            comp.cases.push(j);
+            const a = zid[j];
+            if (a) comp.anciens[a] = (comp.anciens[a] || 0) + 1;
+            for (let k = 0; k < 8; k++) {
+                const w = _lutteVoisins8[j * 8 + k];
+                if (w >= 0 && !_zoneMarque[w] && cel[w] === v) { _zoneMarque[w] = m; _zonePile.push(w); }
+            }
+        }
+    }
+    compos.sort(function (a, b) { return b.cases.length - a.cases.length; });
+
+    const neuves = {};
+    for (let c = 0; c < compos.length; c++) {
+        const comp = compos[c];
+        let id = 0, best = 0;
+        for (const a in comp.anciens) {
+            if (neuves[a]) continue;
+            if (comp.anciens[a] > best) { best = comp.anciens[a]; id = +a; }
+        }
+        if (!id) id = _zidNeuf(neuves);
+        if (!id) continue;
+        let sp = 0, el = 0;
+        for (const a in comp.anciens) {
+            const z = anciennes[a];
+            if (!z) continue;
+            /* Le prorata se prend sur nRef, le compte du dernier recalcul :
+               la poussee a deja bouge les compteurs, s'en servir ferait payer
+               deux fois le terrain perdu. */
+            const part = Math.min(1, comp.anciens[a] / Math.max(1, z.nRef || z.n));
+            sp += z.spores * part;
+            el += (z.elan || 0) * part;
+        }
+        const z0 = anciennes[id];
+        neuves[id] = { v: comp.v, n: comp.cases.length, nRef: comp.cases.length,
+                       spores: sp, elan: el, cx: 0, cy: 0,
+                       debit: z0 ? z0.debit : 0, rendement: z0 ? z0.rendement : 0,
+                       fonte: z0 ? z0.fonte : 0 };
+        let sx = 0, sy = 0;
+        for (let k = 0; k < comp.cases.length; k++) {
+            const j = comp.cases[k];
+            zid[j] = id;
+            sx += j % LUTTE_N; sy += (j / LUTTE_N) | 0;
+        }
+        neuves[id].cx = sx / comp.cases.length;
+        neuves[id].cy = sy / comp.cases.length;
+    }
+    L.zones = neuves;
+}
+
+function zonesAgreger(body, L) {
+    let def = 0;
+    const att = {};
+    for (const id in L.zones) {
+        const z = L.zones[id];
+        if (z.v === 0) def += z.spores;
+        else att[z.v - 1] = (att[z.v - 1] || 0) + z.spores;
+    }
+    if (body.owner !== null && body.owner !== undefined) body.spores = def;
+    L.assaut = att;
+}
+
+function zonesDe(body, slot) {
+    const L = body.lutte;
+    if (!L || !L.zones) return [];
+    const v = campDe(body, slot);
+    const out = [];
+    for (const id in L.zones) if (L.zones[id].v === v) out.push({ id: +id, z: L.zones[id] });
+    out.sort(function (a, b) { return b.z.n - a.z.n; });
+    return out;
+}
+
+/* La zone d'ou l'on tire. Le client n'ayant pas la meme numerotation que le
+   serveur, il annonce le POINT ou se trouve la zone qu'il a choisie ; a
+   defaut, ou si ce point ne donne rien, c'est la plus grande qui tire. */
+function zoneDeTir(body, slot, zx, zy) {
+    const L = body.lutte;
+    if (!L || !L.zones) return null;
+    if (zx !== undefined && zy !== undefined && isFinite(zx) && isFinite(zy)) {
+        const i = _celluleA(body, zx, zy);
+        if (i >= 0) {
+            const id = L.zid ? L.zid[i] : 0;
+            const z = id ? L.zones[id] : null;
+            if (z && z.v === campDe(body, slot)) return { id: id, z: z };
+        }
+    }
+    /* A defaut, la zone la mieux pourvue parmi celles qui ont le droit de
+       tirer : la plus grande n'est pas forcement celle qui a des troupes. */
+    const liste = zonesDe(body, slot);
+    if (!liste.length) return null;
+    let best = null;
+    for (let i = 0; i < liste.length; i++) {
+        if (liste[i].z.n < ZONE_MIN) continue;
+        if (!best || liste[i].z.spores > best.z.spores) best = liste[i];
+    }
+    return best || liste[0];
+}
+
+function _frontDe(L, id, v, sortie) {
     sortie.length = 0;
-    const cel = L.cellules;
+    const cel = L.cellules, zid = L.zid;
     for (let i = 0; i < cel.length; i++) {
         const w = cel[i];
         if (w === LUTTE_VIDE || w === v) continue;
         let n = 0;
         for (let k = 0; k < 8; k++) {
             const j = _lutteVoisins8[i * 8 + k];
-            if (j >= 0 && cel[j] === v) n++;
+            if (j >= 0 && zid[j] === id) n++;
         }
         if (n) sortie.push({ i: i, n: n });
     }
     return sortie;
 }
 
-/* Le grain du sol, tire une fois par bataille et lisse une fois : c'est lui
-   qui fait avancer le front par lobes au lieu d'un cercle regulier. */
 function _grainLutte(state, L) {
     if (L.grain) return L.grain;
     const N = LUTTE_N;
@@ -1037,74 +1186,67 @@ function majLutte(state, body, pas) {
     const neutre = (body.owner === null || body.owner === undefined);
     const alea = state._gameRng || Math.random;
 
+    zonesRecalculer(body, L);
+
     _lutteCompte.fill(0);
     let total = 0;
     for (let i = 0; i < nb; i++) { const v = cel[i]; if (v === LUTTE_VIDE) continue; total++; _lutteCompte[v]++; }
     if (!total) { body.lutte = null; return; }
 
-    /* Chacun produit au prorata de ce qu'il tient, sous le plafond que lui
-       donne son terrain, et au rendement de la courbe de croissance. */
-    for (let v = 0; v < _lutteCompte.length; v++) {
-        const n = _lutteCompte[v];
-        if (!n) continue;
-        const plafond = body.maxSpores * (n / total);
-        if (v === 0) {
-            if (neutre) continue;
-            const deb = debitPour(state, body, body.owner) * (n / total)
-                      * courbeCroissance(body.spores / Math.max(1, plafond));
-            if (body.spores < plafond) body.spores = Math.min(plafond, body.spores + deb * pas);
-        } else {
-            const sl = v - 1;
-            const stock = L.assaut[sl] || 0;
-            const deb = debitPour(state, body, sl) * (n / total)
-                      * courbeCroissance(stock / Math.max(1, plafond));
-            if (stock < plafond) L.assaut[sl] = Math.min(plafond, stock + deb * pas);
-        }
+    /* Chaque zone produit pour elle-meme, au prorata de sa surface, sous le
+       plafond que cette surface lui donne, et au rendement de la courbe. */
+    for (const id in L.zones) {
+        const z = L.zones[id];
+        const slot = (z.v === 0) ? body.owner : z.v - 1;
+        z.plafond = body.maxSpores * (z.n / total);
+        if (slot === null || slot === undefined) { z.debit = 0; z.rendement = 0; continue; }
+        z.rendement = courbeCroissance(z.spores / Math.max(1, z.plafond));
+        z.debit = debitPour(state, body, slot) * (z.n / total) * z.rendement;
+        if (z.spores < z.plafond) z.spores = Math.min(z.plafond, z.spores + z.debit * pas);
     }
 
-    /* Le chantier d'un astre partage : updateSporeGeneration ne passe plus
-       par la, c'est donc ici qu'il aboutit, paye par la reserve du camp qui
-       l'a demande et pose sur le sol de ce camp. */
+    const cout = coutCase(body, total);
+    const grain = _grainLutte(state, L);
+    let pousseEncore = false;
+
+    /* Le chantier d'un astre partage aboutit ici, paye par la zone qui l'a
+       demande et pose sur son sol. */
     if (body.buildMode === 'nid' || body.buildMode === 'biome' || body.buildMode === 'alveole') {
         const bs = (body.buildSlot !== undefined) ? body.buildSlot : body.owner;
-        const bv = campDe(body, bs);
-        if (_lutteCompte[bv] > 0) {
+        const zb = zoneDeTir(body, bs);
+        if (zb && zb.z.n >= ZONE_MIN) {
             const prixB = coutBatiment(body, body.buildMode);
-            const caisse = (bv === 0) ? (neutre ? 0 : body.spores) : (L.assaut[bs] || 0);
-            if (caisse >= prixB) {
-                if (bv === 0) body.spores -= prixB; else L.assaut[bs] -= prixB;
+            if (zb.z.spores >= prixB) {
+                zb.z.spores -= prixB;
                 if (body.buildMode === 'alveole') body.baseMaxSpores = body.baseMaxSpores || body.maxSpores;
-                poserEdifice(state, body, body.buildMode, bv);
+                poserEdifice(state, body, body.buildMode, zb.z.v);
                 body.buildMode = 'off';
                 body.buildProgress = 0;
             }
         }
     }
 
-    /* LA POUSSEE. Un camp n'avance que s'il a de l'elan, et chaque case lui
-       coute le prix du sol. Personne ne repousse tout seul. */
-    const cout = coutCase(body, total);
-    const grain = _grainLutte(state, L);
-    const elan = L.elan || (L.elan = {});
-    let pousseEncore = false;
-
-    /* L'IA contre-attaque d'elle-meme des qu'elle a du surplus : elle n'a
-       personne pour decider a sa place. */
-    if (!neutre && _lutteCompte[0] > 0 && !(elan[0] >= cout)) {
+    /* L'IA contre-attaque d'elle-meme des qu'elle a du surplus. */
+    if (!neutre) {
         const j0 = state.players[body.owner];
         if (j0 && !j0.socketId) {
-            const plafond0 = body.maxSpores * (_lutteCompte[0] / total);
-            const surplus = body.spores - plafond0 * 0.5;
-            if (surplus >= cout) elan[0] = surplus;
+            const miennes = zonesDe(body, body.owner);
+            for (let k = 0; k < miennes.length; k++) {
+                const z = miennes[k].z;
+                if (z.n < ZONE_MIN || z.elan >= cout) continue;
+                const surplus = z.spores - z.plafond * 0.5;
+                if (surplus >= cout) z.elan = surplus;
+            }
         }
     }
 
-    for (const k in elan) {
-        const v = +k;
-        if (!(elan[v] >= cout) || !_lutteCompte[v]) { delete elan[v]; continue; }
+    /* La poussee, zone par zone. */
+    for (const id in L.zones) {
+        const z = L.zones[id];
+        if (!(z.elan >= cout)) { z.elan = 0; continue; }
         let cases = Math.max(1, Math.round(LUTTE_CADENCE * pas));
-        const front = _frontDe(L, v, _lutteCandidats);
-        if (!front.length) { delete elan[v]; continue; }
+        const front = _frontDe(L, +id, z.v, _lutteCandidats);
+        if (!front.length) { z.elan = 0; continue; }
         for (let i = 0; i < front.length; i++) {
             const f = front[i];
             f.p = f.n * 0.30 + grain[f.i] * 2.6 + alea() * 1.3;
@@ -1113,35 +1255,70 @@ function majLutte(state, body, pas) {
         for (let i = 0; i < front.length && cases > 0; i++) {
             const j = front[i].i;
             const perdant = cel[j];
-            if (perdant === v || perdant === LUTTE_VIDE) continue;
-            /* Le sol vierge se prend pour presque rien : personne ne le defend. */
+            if (perdant === z.v || perdant === LUTTE_VIDE) continue;
             const prix = (perdant === 0 && neutre) ? cout * 0.15 : cout;
-            if (elan[v] < prix) break;
-            cel[j] = v;
+            if (z.elan < prix || z.spores < prix) break;
+            const perdue = L.zones[L.zid[j]];
+            if (perdue) perdue.n--;
+            cel[j] = z.v;
+            L.zid[j] = +id;
+            z.n++;
             _lutteCompte[perdant]--;
-            _lutteCompte[v]++;
-            elan[v] -= prix;
-            if (v === 0) { if (!neutre) body.spores = Math.max(0, body.spores - prix); }
-            else { const sl = v - 1; L.assaut[sl] = Math.max(0, (L.assaut[sl] || 0) - prix); }
+            _lutteCompte[z.v]++;
+            z.elan -= prix;
+            z.spores = Math.max(0, z.spores - prix);
             cases--;
         }
-        if (elan[v] >= cout) pousseEncore = true; else delete elan[v];
+        if (z.elan >= cout) pousseEncore = true; else z.elan = 0;
     }
     L.dormante = !pousseEncore;
+
+    /* La fonte : une zone de moins de dix cases, une fois son elan retombe,
+       s'effrite case par case jusqu'a disparaitre. */
+    for (const id in L.zones) {
+        const z = L.zones[id];
+        if (z.n >= ZONE_MIN || z.elan >= cout) { z.fonte = 0; continue; }
+        z.fonte = (z.fonte || 0) + pas;
+        if (z.fonte < ZONE_FONTE) continue;
+        z.fonte = 0;
+        let pire = -1, pireN = -1, repreneur = 0;
+        for (let i = 0; i < nb; i++) {
+            if (L.zid[i] !== +id) continue;
+            const voisins = {};
+            let etrangers = 0;
+            for (let k = 0; k < 8; k++) {
+                const j = _lutteVoisins8[i * 8 + k];
+                if (j < 0 || cel[j] === LUTTE_VIDE || cel[j] === z.v) continue;
+                voisins[cel[j]] = (voisins[cel[j]] || 0) + 1;
+                etrangers++;
+            }
+            if (etrangers > pireN) {
+                pireN = etrangers; pire = i;
+                let best = 0;
+                for (const w in voisins) if (voisins[w] > best) { best = voisins[w]; repreneur = +w; }
+            }
+        }
+        if (pire >= 0 && pireN > 0) {
+            cel[pire] = repreneur;
+            _lutteCompte[z.v]--;
+            _lutteCompte[repreneur]++;
+            z.n--;
+        }
+    }
+
+    zonesAgreger(body, L);
 
     for (const k in L.assaut) {
         const sl = +k, v = sl + 1;
         if (_lutteCompte[v] > 0) continue;
         delete L.assaut[sl];
-        delete elan[v];
     }
 
     L.majorite = (total - _lutteCompte[0]) / total >= LUTTE_MAJORITE;
 
     let vainqueur = -1, meilleur = 0;
-    for (const k in L.assaut) {
-        const v = (+k) + 1;
-        if (_lutteCompte[v] > meilleur) { meilleur = _lutteCompte[v]; vainqueur = +k; }
+    for (let v = 1; v < _lutteCompte.length; v++) {
+        if (_lutteCompte[v] > meilleur) { meilleur = _lutteCompte[v]; vainqueur = v - 1; }
     }
     if (vainqueur < 0) { body.lutte = null; return; }
     if (_lutteCompte[0] === 0) {
@@ -1167,7 +1344,16 @@ function _resumeLutte(body) {
     }
     const a = [];
     for (const k in L.assaut) a.push([+k, Math.round(L.assaut[k]), compte[+k] || 0]);
-    return { d: def, a: a, m: !!L.majorite };
+    /* Les zones, pour que le client affiche de vrais chiffres et sache d'ou il
+       tire : numero, camp, cases, spores, rendement et centre sur la grille.
+       La grille elle-meme ne part toujours pas sur le reseau. */
+    const zs = [];
+    for (const id in L.zones) {
+        const z = L.zones[id];
+        zs.push([+id, z.v, z.n, Math.round(z.spores), Math.round((z.rendement || 0) * 100),
+                 Math.round(z.cx * 10) / 10, Math.round(z.cy * 10) / 10]);
+    }
+    return { d: def, a: a, m: !!L.majorite, z: zs };
 }
 
 /* PRISE D'UN ASTRE : ce n'est plus l'impact qui conquiert mais la bataille
@@ -1754,13 +1940,13 @@ function majChargementTir(state, dt) {
 
 /* Le tireur n'est pas forcement le proprietaire : on peut lancer depuis la
    tete de pont qu'on tient sur la planete de quelqu'un d'autre. */
-function launchJet(state, source, dirX, dirY, sporeType, slot) {
+function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy) {
     sporeType = sporeType || 'normal';
     const tireur = (slot === undefined || slot === null) ? source.owner : slot;
     const player = state.players[tireur];
     if (!player) return;
     const chezSoi = (source.owner === tireur);
-    if (!chezSoi && !(source.lutte && (source.lutte.assaut[tireur] || 0) > 0)) return;
+    if (!chezSoi && !(source.lutte && zonesDe(source, tireur).length)) return;
 
     let sporeCount;
     if (sporeType === 'parasite') {
@@ -1771,11 +1957,20 @@ function launchJet(state, source, dirX, dirY, sporeType, slot) {
     } else {
         const _ratio = (player.jetRatio !== undefined) ? player.jetRatio
                      : (state.jetRatio || 0.5);
-        const reserve = chezSoi ? source.spores : source.lutte.assaut[tireur];
-        sporeCount = Math.floor(reserve * _ratio);
-        if (sporeCount < 5) return;
-        if (chezSoi) source.spores -= sporeCount;
-        else source.lutte.assaut[tireur] -= sporeCount;
+        if (source.lutte) {
+            /* Sur un astre partage, un tir part d'une ZONE et de sa reserve.
+               Sous dix cases, elle n'a pas de quoi organiser un depart. */
+            const zt = zoneDeTir(source, tireur, zx, zy);
+            if (!zt || zt.z.n < ZONE_MIN) return;
+            sporeCount = Math.floor(zt.z.spores * _ratio);
+            if (sporeCount < 5) return;
+            zt.z.spores -= sporeCount;
+            zonesAgreger(source, source.lutte);
+        } else {
+            sporeCount = Math.floor(source.spores * _ratio);
+            if (sporeCount < 5) return;
+            source.spores -= sporeCount;
+        }
     }
 
     const speed = 20 + player.stats.velocity * 6;
