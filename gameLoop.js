@@ -570,11 +570,19 @@ function updateSporeGeneration(state, dt) {
    Le serveur ne dessine rien : il ne transmet que les comptes de cases et
    les stocks, le client peint sa tache lui-meme.
    ───────────────────────────────────────────── */
-const LUTTE_N = 18;
+const LUTTE_N = 32;
 const LUTTE_PAS = 0.2;
-const LUTTE_AVANCE = 3.2;
+const LUTTE_AVANCE = 5;
 const LUTTE_REMOUS = 0.18;
-const LUTTE_USURE = 6;
+const LUTTE_USURE = 0.15;      /* part du stock rongee par seconde au front */
+const LUTTE_FRONT_REF = 54;    /* longueur de front de reference pour cette part */
+/* Secondes de production comptees dans la pression d'un camp, en plus de son
+   stock. Sans ce terme, un camp a sec tombe a une pression nulle et se fait
+   balayer jusqu'a la derniere case : le terrain conquis ne resterait jamais.
+   Avec lui, deux camps epuises pesent le meme poids par case - la frontiere
+   se fige ou elle est - et c'est la difference de production qui la fait
+   ensuite glisser d'un cote ou de l'autre. */
+const LUTTE_FENETRE = 15;
 const LUTTE_VIDE = 255;
 
 let _lutteMasque = null, _lutteVoisins = null, _lutteTampon = null;
@@ -735,14 +743,15 @@ function majLutte(state, body, pas) {
         if (!n) continue;
         if (v === 0) {
             if (!neutre) {
-                const gain = debitPour(state, body, body.owner) * (n / total) * pas;
-                if (body.spores < body.maxSpores) body.spores = Math.min(body.maxSpores, body.spores + gain);
-                _luttePression[0] = body.spores / n;
+                const deb = debitPour(state, body, body.owner) * (n / total);
+                if (body.spores < body.maxSpores) body.spores = Math.min(body.maxSpores, body.spores + deb * pas);
+                _luttePression[0] = (body.spores + deb * LUTTE_FENETRE) / n;
             }
         } else {
             const sl = v - 1;
-            L.assaut[sl] = (L.assaut[sl] || 0) + debitPour(state, body, sl) * (n / total) * pas;
-            _luttePression[v] = L.assaut[sl] / n;
+            const deb = debitPour(state, body, sl) * (n / total);
+            L.assaut[sl] = (L.assaut[sl] || 0) + deb * pas;
+            _luttePression[v] = (L.assaut[sl] + deb * LUTTE_FENETRE) / n;
         }
     }
 
@@ -765,26 +774,51 @@ function majLutte(state, body, pas) {
     }
     cel.set(_lutteTampon);
 
-    let engage = (neutre ? 0 : body.spores);
-    for (const k in L.assaut) engage += L.assaut[k] || 0;
-    const echelle = 1 + engage / 6000;
-    for (let v = 0; v < _lutteUsure.length; v++) {
-        const f = _lutteUsure[v];
-        if (!f) continue;
-        const perte = LUTTE_USURE * pas * f * echelle;
-        if (v === 0) { if (!neutre) body.spores = Math.max(0, body.spores - perte); }
-        else { const sl = v - 1; L.assaut[sl] = Math.max(0, (L.assaut[sl] || 0) - perte); }
+    /* L'usure du front ronge une PART du stock, la MEME des deux cotes. Deux
+       choix qui comptent :
+       - une part et non un nombre fixe de spores : avec un nombre fixe, le
+         plus petit stock tombait a zero et se faisait balayer jusqu'a la
+         derniere case, le terrain conquis ne restait jamais ;
+       - la meme part pour tous, mesuree sur la longueur du front partage et
+         non sur le perimetre de chaque camp : sinon une petite poche, qui
+         n'est que du bord, payait trois fois plus qu'un grand territoire et
+         finissait toujours par ceder.
+       Chaque camp se stabilise donc la ou sa production compense son usure,
+       et comme le taux est commun, deux camps de meme production pesent le
+       meme poids par case : la frontiere se fige. C'est alors la difference
+       de production - ou un renfort de spores - qui la fait glisser. */
+    let front = 0, pTotale = 0;
+    for (let v = 0; v < _lutteUsure.length; v++) front += _lutteUsure[v];
+    front /= 2;
+    for (let v = 0; v < _luttePression.length; v++) pTotale += _luttePression[v];
+    if (front > 0) {
+        const base = LUTTE_USURE * pas * (front / LUTTE_FRONT_REF);
+        /* Chacun perd une part de son stock d'autant plus grosse que l'adverse
+           pese lourd : a forces egales les deux perdent autant et la
+           frontiere se fige, mais des qu'un camp domine il s'use moins vite
+           que l'autre et finit par emporter l'astre. Sans ce poids, une part
+           identique des deux cotes gardait le rapport des stocks a jamais -
+           on ne pouvait plus prendre une planete, seulement l'entamer. */
+        const perdre = function (avoir, pression) {
+            const adv = pTotale - pression;
+            if (adv <= 0) return avoir;
+            const t = Math.min(0.4, base * 2 * (adv / (pression + adv)));
+            return Math.max(0, avoir * (1 - t));
+        };
+        if (!neutre) body.spores = perdre(body.spores, _luttePression[0]);
+        for (const k in L.assaut) L.assaut[k] = perdre(L.assaut[k], _luttePression[(+k) + 1]);
     }
 
     _lutteCompte.fill(0);
     total = 0;
     for (let i = 0; i < nb; i++) { const v = cel[i]; if (v === LUTTE_VIDE) continue; total++; _lutteCompte[v]++; }
 
+    /* LE TERRAIN CONQUIS RESTE : un assaillant a court de spores ne pousse
+       plus mais garde ce qu'il tient et continue d'y produire. On ne le
+       chasse que lorsqu'il ne tient plus une seule case. */
     for (const k in L.assaut) {
         const sl = +k, v = sl + 1;
-        if (L.assaut[sl] > 0.5 && _lutteCompte[v] > 0) continue;
-        for (let i = 0; i < nb; i++) if (cel[i] === v) { cel[i] = 0; _lutteCompte[0]++; }
-        _lutteCompte[v] = 0;
+        if (_lutteCompte[v] > 0) continue;
         delete L.assaut[sl];
     }
 
@@ -795,7 +829,9 @@ function majLutte(state, body, pas) {
     }
     if (vainqueur < 0) { body.lutte = null; return; }
 
-    if (_lutteCompte[0] === 0 || (!neutre && body.spores <= 0.5)) {
+    /* L'astre ne tombe qu'au dernier pouce de sol : un defenseur a sec n'est
+       plus mis en deroute, il peut repartir de ce qu'il tient. */
+    if (_lutteCompte[0] === 0) {
         const reste = L.assaut[vainqueur] || 0;
         body.lutte = null;
         conquerir(state, body, vainqueur, reste);
