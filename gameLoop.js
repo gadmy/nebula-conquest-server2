@@ -591,59 +591,36 @@ function updateSporeGeneration(state, dt) {
    ───────────────────────────────────────────── */
 const LUTTE_N = 32;
 const LUTTE_PAS = 0.2;
-const LUTTE_AVANCE = 5;
-const LUTTE_REMOUS = 0.18;
-/* Le front avance a l'ECART de pression, pas a son rapport brut : sans ce
-   levier, quatre mille cent spores contre quatre mille n'avancaient pour
-   ainsi dire pas, et la tete de pont mourait du remous avant d'avoir servi.
-   Un pour cent d'avance vaut desormais quatre pour cent de poussee. */
-const LUTTE_LEVIER = 4;
-const LUTTE_USURE = 0.15;      /* part du stock rongee par seconde au front */
-const LUTTE_FRONT_REF = 54;
-/* En dessous de ce stock, plus personne n'a de quoi pousser : le front
-   s'endort. Il ne se rendort pas tout seul et ne se reveille pas tout seul
-   non plus - il faut un nouveau debarquement pour relancer le conflit.
-   Chacun continue en revanche de produire sur ce qu'il tient. */
-/* En dessous de cette part de la capacite de l'astre, plus personne n'a de
-   quoi pousser et le front s'endort. Une part et non un nombre fixe : trente
-   spores ne veulent pas dire la meme chose sur une lune de quatre cents et
-   sur une geante de vingt mille. */
-const LUTTE_SEUIL_PART = 0.02;
-
-/* COURBE DE CROISSANCE. Une population se multiplie mal quand elle est
-   presque eteinte - il n'y a personne pour se reproduire - et mal quand elle
-   sature - il n'y a plus de place. Le rendement est maximal A MI-CAPACITE.
-   C'est la que se joue toute la gestion : vider un astre pour attaquer le
-   ralentit, le laisser plein aussi, et savoir ou se tient ce point fait la
-   difference. La capacite d'un camp suit la surface qu'il tient, donc perdre
-   du terrain abaisse aussi son plafond. */
-function courbeCroissance(part) {
-    if (!(part > 0)) return 0.15;
-    if (part >= 1) return 0;
-    return Math.max(0.15 * (1 - part), 4 * part * (1 - part));
-}    /* longueur de front de reference pour cette part */
-/* Secondes de production comptees dans la pression d'un camp, en plus de son
-   stock. Sans ce terme, un camp a sec tombe a une pression nulle et se fait
-   balayer jusqu'a la derniere case : le terrain conquis ne resterait jamais.
-   La pression est le STOCK, et non le stock par case : diviser par la surface
-   revenait a recompenser la petite poche, et cinq spores sur trois cases
-   tenaient tete a cinq cents spores sur sept cents. Ce sont les troupes qui
-   pesent ; la surface compte par ce qu'elle produit et par le plafond qu'elle
-   donne. */
-const LUTTE_FENETRE = 15;
 const LUTTE_VIDE = 255;
+const LUTTE_CADENCE = 30;      /* cases prises par seconde */
+const LUTTE_MAJORITE = 0.5;    /* part etrangere au-dela de laquelle l'astre sort du groupement */
 
-let _lutteMasque = null, _lutteVoisins = null, _lutteTampon = null;
+/* LE PRIX DU SOL. La planete entiere vaut sa capacite en spores : une case
+   coute donc la capacite divisee par le nombre de cases. Attaquer avec X
+   spores rapporte X cases-equivalentes - il n'est plus besoin d'avoir plus de
+   troupes que l'adversaire. On pousse tant qu'on a de quoi payer, puis le
+   front s'arrete et les deux camps se remettent a produire. */
+function coutCase(body, total) {
+    return Math.max(1, (body.maxSpores || 1) / Math.max(1, total));
+}
+
+/* COURBE DE CROISSANCE : rendement maximal a mi-capacite. */
+function courbeCroissance(part) {
+    if (!(part > 0)) return 0.35;
+    if (part >= 1) return 0;
+    return Math.max(0.35 * (1 - part), 4 * part * (1 - part));
+}
+
+let _lutteMasque = null, _lutteVoisins = null, _lutteVoisins8 = null;
 const _lutteCompte = new Int16Array(34);
-const _lutteUsure = new Int32Array(34);
-const _luttePression = new Float64Array(34);
+const _lutteCandidats = [];
 
 function _luttePrepare() {
     if (_lutteMasque) return;
     const N = LUTTE_N, c = (N - 1) / 2, r = N / 2 - 0.15;
     _lutteMasque = new Uint8Array(N * N);
     _lutteVoisins = new Int16Array(N * N * 4);
-    _lutteTampon = new Uint8Array(N * N);
+    _lutteVoisins8 = new Int16Array(N * N * 8);
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
         const dx = x - c, dy = y - c;
         _lutteMasque[y * N + x] = (dx * dx + dy * dy <= r * r) ? 1 : 0;
@@ -653,6 +630,15 @@ function _luttePrepare() {
         const v = [x > 0 ? i - 1 : -1, x < N - 1 ? i + 1 : -1,
                    y > 0 ? i - N : -1, y < N - 1 ? i + N : -1];
         for (let k = 0; k < 4; k++) _lutteVoisins[i * 4 + k] = (v[k] >= 0 && _lutteMasque[v[k]]) ? v[k] : -1;
+        /* Huit voisins pour la poussee : a quatre, la tache finit carree. */
+        let k8 = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = x + dx, ny = y + dy;
+            const j = ny * N + nx;
+            _lutteVoisins8[i * 8 + k8++] =
+                (nx >= 0 && nx < N && ny >= 0 && ny < N && _lutteMasque[j]) ? j : -1;
+        }
     }
 }
 
@@ -680,7 +666,11 @@ function engagerLutte(body, slot, spores, angle) {
     }
     const L = body.lutte;
     L.assaut[slot] = (L.assaut[slot] || 0) + spores;
-    L.dormante = false;      /* un debarquement reveille toujours le front */
+    /* Les spores qui debarquent sont engagees dans l'assaut : c'est cet elan
+       qui achete du sol, case par case, jusqu'a epuisement. */
+    if (!L.elan) L.elan = {};
+    L.elan[slot + 1] = (L.elan[slot + 1] || 0) + spores;
+    L.dormante = false;
     let tient = false;
     for (let i = 0; i < L.cellules.length; i++) if (L.cellules[i] === slot + 1) { tient = true; break; }
     if (!tient) {
@@ -875,6 +865,8 @@ function debarquerSurface(body, slot, spores, wx, wy) {
     }
     if (v === 0) body.spores = Math.min(body.maxSpores, (body.spores || 0) + spores);
     else L.assaut[slot] = (L.assaut[slot] || 0) + spores;
+    if (!L.elan) L.elan = {};
+    L.elan[v] = (L.elan[v] || 0) + spores;
 }
 
 function lancerJetSurface(state, body, slot, tx, ty) {
@@ -918,6 +910,44 @@ function majLuttes(state, dt) {
     }
 }
 
+function _frontDe(L, v, sortie) {
+    sortie.length = 0;
+    const cel = L.cellules;
+    for (let i = 0; i < cel.length; i++) {
+        const w = cel[i];
+        if (w === LUTTE_VIDE || w === v) continue;
+        let n = 0;
+        for (let k = 0; k < 8; k++) {
+            const j = _lutteVoisins8[i * 8 + k];
+            if (j >= 0 && cel[j] === v) n++;
+        }
+        if (n) sortie.push({ i: i, n: n });
+    }
+    return sortie;
+}
+
+/* Le grain du sol, tire une fois par bataille et lisse une fois : c'est lui
+   qui fait avancer le front par lobes au lieu d'un cercle regulier. */
+function _grainLutte(state, L) {
+    if (L.grain) return L.grain;
+    const N = LUTTE_N;
+    const alea = state._gameRng || Math.random;
+    const brut = new Float32Array(N * N);
+    for (let i = 0; i < brut.length; i++) brut[i] = alea();
+    const g = new Float32Array(N * N);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        let somme = 0, n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= N || ny < 0 || ny >= N) continue;
+            somme += brut[ny * N + nx]; n++;
+        }
+        g[y * N + x] = somme / n;
+    }
+    L.grain = g;
+    return g;
+}
+
 function majLutte(state, body, pas) {
     const L = body.lutte, cel = L.cellules, nb = cel.length;
     const neutre = (body.owner === null || body.owner === undefined);
@@ -928,115 +958,89 @@ function majLutte(state, body, pas) {
     for (let i = 0; i < nb; i++) { const v = cel[i]; if (v === LUTTE_VIDE) continue; total++; _lutteCompte[v]++; }
     if (!total) { body.lutte = null; return; }
 
-    _luttePression.fill(0);
+    /* Chacun produit au prorata de ce qu'il tient, sous le plafond que lui
+       donne son terrain, et au rendement de la courbe de croissance. */
     for (let v = 0; v < _lutteCompte.length; v++) {
         const n = _lutteCompte[v];
         if (!n) continue;
-        const part = n / total;
-        const plafond = body.maxSpores * part;
+        const plafond = body.maxSpores * (n / total);
         if (v === 0) {
-            if (!neutre) {
-                const deb = debitPour(state, body, body.owner) * part
-                          * courbeCroissance(body.spores / Math.max(1, plafond));
-                if (body.spores < plafond) body.spores = Math.min(plafond, body.spores + deb * pas);
-                _luttePression[0] = body.spores + deb * LUTTE_FENETRE;
-            }
+            if (neutre) continue;
+            const deb = debitPour(state, body, body.owner) * (n / total)
+                      * courbeCroissance(body.spores / Math.max(1, plafond));
+            if (body.spores < plafond) body.spores = Math.min(plafond, body.spores + deb * pas);
         } else {
             const sl = v - 1;
             const stock = L.assaut[sl] || 0;
-            const deb = debitPour(state, body, sl) * part
+            const deb = debitPour(state, body, sl) * (n / total)
                       * courbeCroissance(stock / Math.max(1, plafond));
-            L.assaut[sl] = (stock < plafond) ? Math.min(plafond, stock + deb * pas) : stock;
-            _luttePression[v] = L.assaut[sl] + deb * LUTTE_FENETRE;
+            if (stock < plafond) L.assaut[sl] = Math.min(plafond, stock + deb * pas);
         }
     }
 
-    /* Front endormi : chacun produit sur ce qu'il tient, mais plus rien ne
-       bouge et personne ne s'use. Il faut un nouveau debarquement. */
-    if (L.dormante) return;
+    /* LA POUSSEE. Un camp n'avance que s'il a de l'elan, et chaque case lui
+       coute le prix du sol. Personne ne repousse tout seul. */
+    const cout = coutCase(body, total);
+    const grain = _grainLutte(state, L);
+    const elan = L.elan || (L.elan = {});
+    let pousseEncore = false;
 
-    _lutteTampon.set(cel);
-    _lutteUsure.fill(0);
-    for (let i = 0; i < nb; i++) {
-        const v = cel[i];
-        if (v === LUTTE_VIDE) continue;
-        for (let k = 0; k < 4; k++) {
-            const j = _lutteVoisins[i * 4 + k];
-            if (j < 0) continue;
-            const w = cel[j];
-            if (w === LUTTE_VIDE || w === v) continue;
-            _lutteUsure[v]++;
-            const somme = _luttePression[v] + _luttePression[w];
-            const r = somme > 0 ? _luttePression[w] / somme : 0.5;
-            const avance = Math.min(1, Math.max(0, (2 * r - 1) * LUTTE_LEVIER));
-            /* Le remous ne s'applique qu'entre camps assez larges : il ferait
-               disparaitre une tete de pont par pur hasard. */
-            const remue = (_lutteCompte[v] > 4 && _lutteCompte[w] > 4) ? LUTTE_REMOUS * pas : 0;
-            const pr = LUTTE_AVANCE * pas * avance + remue;
-            if (alea() < pr) { _lutteTampon[i] = w; break; }
+    /* L'IA contre-attaque d'elle-meme des qu'elle a du surplus : elle n'a
+       personne pour decider a sa place. */
+    if (!neutre && _lutteCompte[0] > 0 && !(elan[0] >= cout)) {
+        const j0 = state.players[body.owner];
+        if (j0 && !j0.socketId) {
+            const plafond0 = body.maxSpores * (_lutteCompte[0] / total);
+            const surplus = body.spores - plafond0 * 0.5;
+            if (surplus >= cout) elan[0] = surplus;
         }
     }
-    cel.set(_lutteTampon);
 
-    /* L'usure du front ronge une PART du stock, la MEME des deux cotes. Deux
-       choix qui comptent :
-       - une part et non un nombre fixe de spores : avec un nombre fixe, le
-         plus petit stock tombait a zero et se faisait balayer jusqu'a la
-         derniere case, le terrain conquis ne restait jamais ;
-       - la meme part pour tous, mesuree sur la longueur du front partage et
-         non sur le perimetre de chaque camp : sinon une petite poche, qui
-         n'est que du bord, payait trois fois plus qu'un grand territoire et
-         finissait toujours par ceder.
-       Chaque camp se stabilise donc la ou sa production compense son usure,
-       et comme le taux est commun, deux camps de meme production pesent le
-       meme poids par case : la frontiere se fige. C'est alors la difference
-       de production - ou un renfort de spores - qui la fait glisser. */
-    let front = 0, pTotale = 0;
-    for (let v = 0; v < _lutteUsure.length; v++) front += _lutteUsure[v];
-    front /= 2;
-    for (let v = 0; v < _luttePression.length; v++) pTotale += _luttePression[v];
-    if (front > 0) {
-        const base = LUTTE_USURE * pas * (front / LUTTE_FRONT_REF);
-        /* Chacun perd une part de son stock d'autant plus grosse que l'adverse
-           pese lourd : a forces egales les deux perdent autant et la
-           frontiere se fige, mais des qu'un camp domine il s'use moins vite
-           que l'autre et finit par emporter l'astre. Sans ce poids, une part
-           identique des deux cotes gardait le rapport des stocks a jamais -
-           on ne pouvait plus prendre une planete, seulement l'entamer. */
-        const perdre = function (avoir, pression) {
-            const adv = pTotale - pression;
-            if (adv <= 0) return avoir;
-            const t = Math.min(0.4, base * 2 * (adv / (pression + adv)));
-            return Math.max(0, avoir * (1 - t));
-        };
-        if (!neutre) body.spores = perdre(body.spores, _luttePression[0]);
-        for (const k in L.assaut) L.assaut[k] = perdre(L.assaut[k], _luttePression[(+k) + 1]);
+    for (const k in elan) {
+        const v = +k;
+        if (!(elan[v] >= cout) || !_lutteCompte[v]) { delete elan[v]; continue; }
+        let cases = Math.max(1, Math.round(LUTTE_CADENCE * pas));
+        const front = _frontDe(L, v, _lutteCandidats);
+        if (!front.length) { delete elan[v]; continue; }
+        for (let i = 0; i < front.length; i++) {
+            const f = front[i];
+            f.p = f.n * 0.30 + grain[f.i] * 2.6 + alea() * 1.3;
+        }
+        front.sort(function (a, b) { return b.p - a.p; });
+        for (let i = 0; i < front.length && cases > 0; i++) {
+            const j = front[i].i;
+            const perdant = cel[j];
+            if (perdant === v || perdant === LUTTE_VIDE) continue;
+            /* Le sol vierge se prend pour presque rien : personne ne le defend. */
+            const prix = (perdant === 0 && neutre) ? cout * 0.15 : cout;
+            if (elan[v] < prix) break;
+            cel[j] = v;
+            _lutteCompte[perdant]--;
+            _lutteCompte[v]++;
+            elan[v] -= prix;
+            if (v === 0) { if (!neutre) body.spores = Math.max(0, body.spores - prix); }
+            else { const sl = v - 1; L.assaut[sl] = Math.max(0, (L.assaut[sl] || 0) - prix); }
+            cases--;
+        }
+        if (elan[v] >= cout) pousseEncore = true; else delete elan[v];
     }
+    L.dormante = !pousseEncore;
 
-    _lutteCompte.fill(0);
-    total = 0;
-    for (let i = 0; i < nb; i++) { const v = cel[i]; if (v === LUTTE_VIDE) continue; total++; _lutteCompte[v]++; }
-
-    /* LE TERRAIN CONQUIS RESTE : un assaillant a court de spores ne pousse
-       plus mais garde ce qu'il tient et continue d'y produire. On ne le
-       chasse que lorsqu'il ne tient plus une seule case. */
     for (const k in L.assaut) {
         const sl = +k, v = sl + 1;
         if (_lutteCompte[v] > 0) continue;
         delete L.assaut[sl];
+        delete elan[v];
     }
 
-    let vainqueur = -1, meilleur = 0, plusGrosStock = neutre ? 0 : body.spores;
+    L.majorite = (total - _lutteCompte[0]) / total >= LUTTE_MAJORITE;
+
+    let vainqueur = -1, meilleur = 0;
     for (const k in L.assaut) {
         const v = (+k) + 1;
         if (_lutteCompte[v] > meilleur) { meilleur = _lutteCompte[v]; vainqueur = +k; }
-        if (L.assaut[k] > plusGrosStock) plusGrosStock = L.assaut[k];
     }
     if (vainqueur < 0) { body.lutte = null; return; }
-    if (plusGrosStock < Math.max(20, body.maxSpores * LUTTE_SEUIL_PART)) L.dormante = true;
-
-    /* L'astre ne tombe qu'au dernier pouce de sol : un defenseur a sec n'est
-       plus mis en deroute, il peut repartir de ce qu'il tient. */
     if (_lutteCompte[0] === 0) {
         const reste = L.assaut[vainqueur] || 0;
         body.lutte = null;
@@ -1060,7 +1064,7 @@ function _resumeLutte(body) {
     }
     const a = [];
     for (const k in L.assaut) a.push([+k, Math.round(L.assaut[k]), compte[+k] || 0]);
-    return { d: def, a: a };
+    return { d: def, a: a, m: !!L.majorite };
 }
 
 /* PRISE D'UN ASTRE : ce n'est plus l'impact qui conquiert mais la bataille
@@ -1130,7 +1134,14 @@ function applyConquest(state, body, jet) {
     let attacking = jet.spores * densityBonus;
 
     if (body.owner === jet.owner) {
-        if (body.spores < body.maxSpores) body.spores = Math.min(body.maxSpores, body.spores + Math.floor(Math.min(jet.spores, body.maxSpores - body.spores)));
+        const _g = Math.floor(Math.min(jet.spores, body.maxSpores - body.spores));
+        if (body.spores < body.maxSpores) body.spores = Math.min(body.maxSpores, body.spores + _g);
+        /* Renforcer un astre assiege, c'est contre-attaquer. */
+        if (body.lutte && _g > 0) {
+            if (!body.lutte.elan) body.lutte.elan = {};
+            body.lutte.elan[0] = (body.lutte.elan[0] || 0) + _g;
+            body.lutte.dormante = false;
+        }
         return;
     }
 
