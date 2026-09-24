@@ -166,7 +166,7 @@ if (ev.type === 'multi') {
                statistiques au maximum en quelques secondes, gratuitement. */
             if (!player._multiPendingTier) return;
             const stat = ev.stat;
-            if (['growth', 'velocity', 'density'].includes(stat)) {
+            if (['growth', 'velocity', 'density', 'sensitivity'].includes(stat)) {
                 if ((player.stats[stat] || 0) < 8) {
                     player.stats[stat] = (player.stats[stat] || 0) + 1;
                 }
@@ -195,6 +195,7 @@ if (ev.type === 'multi') {
         updateSporeGeneration(this.state, dt);
         updateJets(this.state, dt);
         majLuttes(this.state, dt);
+        majOndesSolaires(this.state, dt);
         updateComets(this.state, dt);
         updateCleaners(this.state, dt);
         majChargementTir(this.state, dt);
@@ -635,6 +636,71 @@ function engagerLutte(body, slot, spores, angle) {
             const i = by * N + bx;
             if (bx >= 0 && bx < N && by >= 0 && by < N && _lutteMasque[i]) { L.cellules[i] = slot + 1; break; }
         }
+    }
+}
+
+/* ─────────────────────────────────────────────
+   ONDES SOLAIRES (portee du client)
+   Un systeme entierement tenu voit son etoile envoyer, toutes les cinq
+   secondes, une onde qui balaie ses astres. Chacun la recoit au passage du
+   front, et ce qu'elle apporte depend de SENSITIVITY : cinq pour cent de la
+   capacite de l'astre par point. Le serveur n'a pas d'anneau a dessiner - il
+   ne fait que crediter les spores, que l'instantane transmet deja.
+   ───────────────────────────────────────────── */
+const ONDE_PERIODE = 5;
+const ONDE_PAR_POINT = 0.05;
+const ONDE_VITESSE = 1100;
+
+function majOndesSolaires(state, dt) {
+    if (!state._ondesSolaires) state._ondesSolaires = [];
+
+    for (let i = 0; i < state.suns.length; i++) {
+        const soleil = state.suns[i];
+        const planetes = soleil.planets || [];
+        if (!planetes.length) { soleil._ondeT = 0; continue; }
+        const proprio = planetes[0].owner;
+        if (proprio === null || proprio === undefined || !isSystemComplete(soleil, proprio)) {
+            soleil._ondeT = 0;
+            continue;
+        }
+        soleil._ondeT = (soleil._ondeT || 0) + dt;
+        if (soleil._ondeT < ONDE_PERIODE) continue;
+        soleil._ondeT = 0;
+
+        let portee = soleil.radius;
+        const corps = [];
+        for (let k = 0; k < planetes.length; k++) {
+            const pl = planetes[k];
+            corps.push(pl);
+            const lunes = pl.moons || [];
+            for (let m = 0; m < lunes.length; m++) corps.push(lunes[m]);
+        }
+        for (let k = 0; k < corps.length; k++) {
+            const b = corps[k];
+            const d = Math.sqrt((b.x - soleil.x) * (b.x - soleil.x) + (b.y - soleil.y) * (b.y - soleil.y)) + b.radius;
+            if (d > portee) portee = d;
+        }
+        state._ondesSolaires.push({ soleil: soleil, slot: proprio, corps: corps, touches: [],
+                                    r: soleil.radius, portee: portee * 1.08 });
+    }
+
+    const os = state._ondesSolaires;
+    for (let i = os.length - 1; i >= 0; i--) {
+        const o = os[i];
+        o.r += ONDE_VITESSE * dt;
+        for (let k = 0; k < o.corps.length; k++) {
+            if (o.touches[k]) continue;
+            const b = o.corps[k];
+            if (b.owner !== o.slot) { o.touches[k] = 1; continue; }
+            const d = Math.sqrt((b.x - o.soleil.x) * (b.x - o.soleil.x) + (b.y - o.soleil.y) * (b.y - o.soleil.y));
+            if (o.r < d) continue;
+            o.touches[k] = 1;
+            const j = state.players[o.slot];
+            const sens = (j && j.stats) ? (j.stats.sensitivity || 0) : 0;
+            const gain = (b.maxSpores || 0) * ONDE_PAR_POINT * sens;
+            if (gain > 0) b.spores = Math.min(b.maxSpores, (b.spores || 0) + gain);
+        }
+        if (o.r >= o.portee) os.splice(i, 1);
     }
 }
 
@@ -1574,4 +1640,4 @@ if (roomId.startsWith('ranked-') && state._onRankedManche) {
     }
 }
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque, engagerLutte, majLuttes, conquerir, _resumeLutte };
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque, engagerLutte, majLuttes, conquerir, _resumeLutte, majOndesSolaires };
