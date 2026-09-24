@@ -114,6 +114,12 @@ if (ev.type === 'jet_surface') {
             return;
         }
 
+if (ev.type === 'riposte') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) riposteGenerale(state, player.id);
+            return;
+        }
+
 if (ev.type === 'aim_end') {
             const player = state.players.find(p => p.socketId === socketId);
             if (player) player._visee = null;
@@ -1021,6 +1027,50 @@ function nbBatimentCamp(state, body, genre, v) {
 
 function campDe(body, slot) {
     return (body.owner === slot) ? 0 : slot + 1;
+}
+
+/* CONTRE-ATTAQUE GENERALE (touche R du client). Sur chacun de ses astres ou
+   un autre tient du terrain, les zones du joueur engagent juste ce qu'il faut
+   pour le reprendre - cases etrangeres multipliees par le prix du sol - et
+   pas une spore de plus. Rien a falsifier : le client ne fait que demander,
+   le serveur calcule et n'engage que ce que les zones ont. */
+function riposteGenerale(state, slot) {
+    let astres = 0;
+    const bodies = state.allBodies || [];
+    for (let bi = 0; bi < bodies.length; bi++) {
+        const body = bodies[bi];
+        const L = body.lutte;
+        if (!L || !L.zones) continue;
+
+        const vMoi = campDe(body, slot);
+        let total = 0, etrangeres = 0;
+        for (const id in L.zones) {
+            const z = L.zones[id];
+            total += z.n;
+            if (z.v !== vMoi) etrangeres += z.n;
+        }
+        if (!etrangeres || !total) continue;
+
+        const miennes = [];
+        let dispo = 0;
+        const liste = zonesDe(body, slot);
+        for (let k = 0; k < liste.length; k++) {
+            if (liste[k].z.n < ZONE_MIN) continue;
+            miennes.push(liste[k].z);
+            dispo += liste[k].z.spores;
+        }
+        const cout = coutCase(body, total);
+        if (!miennes.length || dispo < cout) continue;
+
+        const part = Math.min(1, (etrangeres * cout) / dispo);
+        for (let k = 0; k < miennes.length; k++) {
+            const z = miennes[k];
+            z.elan = Math.max(z.elan || 0, z.spores * part);
+        }
+        L.dormante = false;
+        astres++;
+    }
+    return astres;
 }
 
 function majLuttes(state, dt) {
@@ -2238,5 +2288,5 @@ if (roomId.startsWith('ranked-') && state._onRankedManche) {
     }
 }
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque, engagerLutte, majLuttes, conquerir, _resumeLutte, majOndesSolaires,
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque, engagerLutte, majLuttes, conquerir, _resumeLutte, majOndesSolaires, riposteGenerale,
     lancerJetSurface, debarquerSurface, peutTirerSurface };
