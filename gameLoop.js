@@ -1012,6 +1012,31 @@ function _groupeTir(src) {
    planete et ses lunes : sa frontiere tient dans un cercle centre sur la
    planete, du rayon de l'orbite lunaire la plus large, plus la marge. Meme
    calcul, mot pour mot, que dans le client. */
+/* Le segment ax,ay -> bx,by coupe-t-il le disque cx,cy,r ? */
+function _segmentCoupeDisque(ax, ay, bx, by, cx, cy, r) {
+    const dx = bx - ax, dy = by - ay;
+    const a = dx * dx + dy * dy;
+    if (a < 1e-9) { const ux = ax - cx, uy = ay - cy; return ux * ux + uy * uy < r * r; }
+    let t = -((ax - cx) * dx + (ay - cy) * dy) / a;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    const px = ax + dx * t - cx, py = ay + dy * t - cy;
+    return px * px + py * py < r * r;
+}
+
+/* Un tir de A vers B traverse-t-il une etoile ou le trou noir ? Les deux
+   detruisent le jet : le plus proche de la cible n'est pas le bon lanceur
+   s'il tire a travers un soleil. Meme regle que dans le client. */
+function tirBloque(state, ax, ay, bx, by) {
+    const suns = state.suns || [];
+    for (let i = 0; i < suns.length; i++) {
+        const s = suns[i];
+        if (_segmentCoupeDisque(ax, ay, bx, by, s.x, s.y, s.radius + 14)) return true;
+    }
+    const bh = state.blackHole;
+    if (bh && _segmentCoupeDisque(ax, ay, bx, by, bh.x, bh.y, bh.dangerZone * 0.4 + 10)) return true;
+    return false;
+}
+
 function _viseeInterne(groupe, x, y) {
     if (!groupe || groupe.length < 2) return false;
     const p = groupe[0];
@@ -1041,14 +1066,21 @@ function majChargementTir(state, dt) {
         const interne = _viseeInterne(groupe, vis.tx, vis.ty);
         let lanceur = vis.lanceur;
         if (!interne || !lanceur || groupe.indexOf(lanceur) < 0) {
+            /* Le plus proche QUI VOIT LA CIBLE : une etoile avale le jet. On
+               ne retombe sur le plus proche tout court que si aucun n'a la
+               vue. */
             lanceur = vis.src;
-            let meilleure = Infinity;
+            let meilleure = Infinity, meilleureVue = Infinity, lanceurVue = null;
             for (let i = 0; i < groupe.length; i++) {
                 const b = groupe[i];
                 const dx = vis.tx - b.x, dy = vis.ty - b.y;
                 const d = dx * dx + dy * dy;
                 if (d < meilleure) { meilleure = d; lanceur = b; }
+                if (d < meilleureVue && !tirBloque(state, b.x, b.y, vis.tx, vis.ty)) {
+                    meilleureVue = d; lanceurVue = b;
+                }
             }
+            if (lanceurVue) lanceur = lanceurVue;
         }
         if (lanceur !== vis.lanceur) { vis.lanceur = lanceur; vis.acc = 0; }
         if (groupe.length < 2) continue;
@@ -1331,4 +1363,4 @@ if (roomId.startsWith('ranked-') && state._onRankedManche) {
     }
 }
 
-module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne };
+module.exports = { GameLoop, updateOrbits, updateSporeGeneration, updateJets, applyConquest, updateAI, _buildState, _groupeTir, majChargementTir, _viseeInterne, tirBloque };
