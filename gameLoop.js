@@ -116,7 +116,8 @@ if (ev.type === 'jet_surface') {
 
 if (ev.type === 'riposte') {
             const player = state.players.find(p => p.socketId === socketId);
-            if (player) riposteGenerale(state, player.id);
+            if (player) riposteGenerale(state, player.id,
+                typeof ev.bodyName === 'string' ? ev.bodyName : null);
             return;
         }
 
@@ -1034,9 +1035,18 @@ function campDe(body, slot) {
    pour le reprendre - cases etrangeres multipliees par le prix du sol - et
    pas une spore de plus. Rien a falsifier : le client ne fait que demander,
    le serveur calcule et n'engage que ce que les zones ont. */
-function riposteGenerale(state, slot) {
+/* nomCible : l'astre sous le curseur du joueur, ou rien du tout. Le client
+   l'envoie par son nom - c'est le seul identifiant que les deux cotes
+   partagent a coup sur. */
+function riposteGenerale(state, slot, nomCible) {
     let astres = 0;
-    const bodies = state.allBodies || [];
+    const tous = state.allBodies || [];
+    let bodies = tous;
+    if (nomCible) {
+        const b = tous.find(x => x.name === nomCible);
+        if (!b) return 0;
+        bodies = [b];
+    }
     for (let bi = 0; bi < bodies.length; bi++) {
         const body = bodies[bi];
         const L = body.lutte;
