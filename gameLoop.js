@@ -480,7 +480,11 @@ function updateSporeGeneration(state, dt) {
         const bodySun = body.type === 'planet' ? body.parent : (body.parent?.parent || null);
         if (bodySun && isSystemComplete(bodySun, body.owner)) sysBonus = 1.03;
 
-        const rate = (0.4 + (body.flore / 100) * 0.6) * (1 + player.stats.growth * 0.3) * 2.5 * symBonus * nidBonus * sysBonus;
+        /* Rendement maximal a mi-capacite : un astre presque vide ou plein
+           produit peu. C'est la courbe de croissance. */
+        const rate = (0.4 + (body.flore / 100) * 0.6) * (1 + player.stats.growth * 0.3)
+                   * 2.5 * symBonus * nidBonus * sysBonus
+                   * courbeCroissance(body.spores / Math.max(1, body.maxSpores));
 
         if (body.buildMode === 'parasite') {
             if ((body.parasiteSpore || 0) < 1) {
@@ -589,19 +593,43 @@ const LUTTE_N = 32;
 const LUTTE_PAS = 0.2;
 const LUTTE_AVANCE = 5;
 const LUTTE_REMOUS = 0.18;
+/* Le front avance a l'ECART de pression, pas a son rapport brut : sans ce
+   levier, quatre mille cent spores contre quatre mille n'avancaient pour
+   ainsi dire pas, et la tete de pont mourait du remous avant d'avoir servi.
+   Un pour cent d'avance vaut desormais quatre pour cent de poussee. */
+const LUTTE_LEVIER = 4;
 const LUTTE_USURE = 0.15;      /* part du stock rongee par seconde au front */
 const LUTTE_FRONT_REF = 54;
 /* En dessous de ce stock, plus personne n'a de quoi pousser : le front
    s'endort. Il ne se rendort pas tout seul et ne se reveille pas tout seul
    non plus - il faut un nouveau debarquement pour relancer le conflit.
    Chacun continue en revanche de produire sur ce qu'il tient. */
-const LUTTE_SEUIL = 30;    /* longueur de front de reference pour cette part */
+/* En dessous de cette part de la capacite de l'astre, plus personne n'a de
+   quoi pousser et le front s'endort. Une part et non un nombre fixe : trente
+   spores ne veulent pas dire la meme chose sur une lune de quatre cents et
+   sur une geante de vingt mille. */
+const LUTTE_SEUIL_PART = 0.02;
+
+/* COURBE DE CROISSANCE. Une population se multiplie mal quand elle est
+   presque eteinte - il n'y a personne pour se reproduire - et mal quand elle
+   sature - il n'y a plus de place. Le rendement est maximal A MI-CAPACITE.
+   C'est la que se joue toute la gestion : vider un astre pour attaquer le
+   ralentit, le laisser plein aussi, et savoir ou se tient ce point fait la
+   difference. La capacite d'un camp suit la surface qu'il tient, donc perdre
+   du terrain abaisse aussi son plafond. */
+function courbeCroissance(part) {
+    if (!(part > 0)) return 0.15;
+    if (part >= 1) return 0;
+    return Math.max(0.15 * (1 - part), 4 * part * (1 - part));
+}    /* longueur de front de reference pour cette part */
 /* Secondes de production comptees dans la pression d'un camp, en plus de son
    stock. Sans ce terme, un camp a sec tombe a une pression nulle et se fait
    balayer jusqu'a la derniere case : le terrain conquis ne resterait jamais.
-   Avec lui, deux camps epuises pesent le meme poids par case - la frontiere
-   se fige ou elle est - et c'est la difference de production qui la fait
-   ensuite glisser d'un cote ou de l'autre. */
+   La pression est le STOCK, et non le stock par case : diviser par la surface
+   revenait a recompenser la petite poche, et cinq spores sur trois cases
+   tenaient tete a cinq cents spores sur sept cents. Ce sont les troupes qui
+   pesent ; la surface compte par ce qu'elle produit et par le plafond qu'elle
+   donne. */
 const LUTTE_FENETRE = 15;
 const LUTTE_VIDE = 255;
 
@@ -800,10 +828,13 @@ function trajectoireSurface(body, ox, oy, tx, ty) {
         vy -= y / d * a * SURFACE_PAS;
         x += vx * SURFACE_PAS;
         y += vy * SURFACE_PAS;
-        const dd = Math.sqrt(x * x + y * y);
-        if (dd > R * 0.97) { x = x / dd * R * 0.97; y = y / dd * R * 0.97; vx *= 0.55; vy *= 0.55; }
         pts.push({ x: x, y: y });
     }
+    /* Le vol passe au-dessus du disque - dans l'atmosphere - mais la chute se
+       fait sur la planete : un point sorti du limbe y est ramene. */
+    const fin = pts[pts.length - 1];
+    const df = Math.sqrt(fin.x * fin.x + fin.y * fin.y);
+    if (df > R * 0.97) { fin.x = fin.x / df * R * 0.97; fin.y = fin.y / df * R * 0.97; }
     return pts;
 }
 
@@ -901,17 +932,22 @@ function majLutte(state, body, pas) {
     for (let v = 0; v < _lutteCompte.length; v++) {
         const n = _lutteCompte[v];
         if (!n) continue;
+        const part = n / total;
+        const plafond = body.maxSpores * part;
         if (v === 0) {
             if (!neutre) {
-                const deb = debitPour(state, body, body.owner) * (n / total);
-                if (body.spores < body.maxSpores) body.spores = Math.min(body.maxSpores, body.spores + deb * pas);
-                _luttePression[0] = (body.spores + deb * LUTTE_FENETRE) / n;
+                const deb = debitPour(state, body, body.owner) * part
+                          * courbeCroissance(body.spores / Math.max(1, plafond));
+                if (body.spores < plafond) body.spores = Math.min(plafond, body.spores + deb * pas);
+                _luttePression[0] = body.spores + deb * LUTTE_FENETRE;
             }
         } else {
             const sl = v - 1;
-            const deb = debitPour(state, body, sl) * (n / total);
-            L.assaut[sl] = (L.assaut[sl] || 0) + deb * pas;
-            _luttePression[v] = (L.assaut[sl] + deb * LUTTE_FENETRE) / n;
+            const stock = L.assaut[sl] || 0;
+            const deb = debitPour(state, body, sl) * part
+                      * courbeCroissance(stock / Math.max(1, plafond));
+            L.assaut[sl] = (stock < plafond) ? Math.min(plafond, stock + deb * pas) : stock;
+            _luttePression[v] = L.assaut[sl] + deb * LUTTE_FENETRE;
         }
     }
 
@@ -932,7 +968,11 @@ function majLutte(state, body, pas) {
             _lutteUsure[v]++;
             const somme = _luttePression[v] + _luttePression[w];
             const r = somme > 0 ? _luttePression[w] / somme : 0.5;
-            const pr = LUTTE_AVANCE * pas * Math.max(0, 2 * r - 1) + LUTTE_REMOUS * pas;
+            const avance = Math.min(1, Math.max(0, (2 * r - 1) * LUTTE_LEVIER));
+            /* Le remous ne s'applique qu'entre camps assez larges : il ferait
+               disparaitre une tete de pont par pur hasard. */
+            const remue = (_lutteCompte[v] > 4 && _lutteCompte[w] > 4) ? LUTTE_REMOUS * pas : 0;
+            const pr = LUTTE_AVANCE * pas * avance + remue;
             if (alea() < pr) { _lutteTampon[i] = w; break; }
         }
     }
@@ -993,7 +1033,7 @@ function majLutte(state, body, pas) {
         if (L.assaut[k] > plusGrosStock) plusGrosStock = L.assaut[k];
     }
     if (vainqueur < 0) { body.lutte = null; return; }
-    if (plusGrosStock < LUTTE_SEUIL) L.dormante = true;
+    if (plusGrosStock < Math.max(20, body.maxSpores * LUTTE_SEUIL_PART)) L.dormante = true;
 
     /* L'astre ne tombe qu'au dernier pouce de sol : un defenseur a sec n'est
        plus mis en deroute, il peut repartir de ce qu'il tient. */
