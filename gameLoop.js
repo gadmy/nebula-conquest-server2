@@ -70,7 +70,11 @@ this.io.to(this.roomId).emit('jet_fired', {
                     dirX:       ev.dirX,
                     dirY:       ev.dirY,
                     sporeType:  ev.sporeType || 'normal',
-                    owner:      src.owner,
+                    /* Le TIREUR : depuis une tete de pont, ce n'est pas le
+                       proprietaire de l'astre. slot pour les clients recents,
+                       owner corrige pour tous. */
+                    owner:      player.id,
+                    slot:       player.id,
                     spores:     jet.spores,
                     color:      jet.color,
                     speed:      jet.speed,
@@ -192,15 +196,17 @@ if (ev.type === 'multi') {
                ait vraiment atteint un palier. Sans elle, repeter cette action
                donnait un point de statistique a chaque envoi - trois
                statistiques au maximum en quelques secondes, gratuitement. */
-            if (!player._multiPendingTier) return;
+            /* Un COMPTEUR de paliers atteints et pas encore places : un second
+               palier atteint avant le choix etait perdu. La progression vers
+               le suivant n'est plus remise a zero au moment du choix. */
+            if (!((player._multiPendingTier | 0) > 0)) return;
             const stat = ev.stat;
             if (['growth', 'velocity', 'density', 'sensitivity'].includes(stat)) {
                 if ((player.stats[stat] || 0) < 8) {
                     player.stats[stat] = (player.stats[stat] || 0) + 1;
                 }
                 player.multiTier = (player.multiTier || 0) + 1;
-                player.multiProgress = 0;
-                player._multiPendingTier = false;
+                player._multiPendingTier = (player._multiPendingTier | 0) - 1;
             }
         }
 
@@ -322,6 +328,10 @@ planets: state.planets.map(p => ({
             name:      m.name,
             owner:     m.owner,
             spores:    Math.round(m.spores || 0),
+            /* Le plafond bouge avec les alveoles : sans lui, le client ne sait
+               pas qu'une lune est pleine (etincelles, fiche). */
+            maxSpores: Math.round(m.maxSpores || 0),
+            symbiosis: Math.round(m.symbiosis || 0),
             buildMode: m.buildMode || 'off',
             nids:      m.nids     || 0,
             biomes:    m.biomes   || 0,
@@ -582,12 +592,16 @@ function updateSporeGeneration(state, dt) {
             }
 
             // Multiplicité
-            if (totalSac > 0 && player.multiTier < 10 && !player._multiPendingTier) {
+            /* Les paliers en attente comptent deja : pour le prix du suivant
+               et pour le plafond de 10. On continue d'accumuler pendant que
+               le joueur n'a pas choisi. */
+            const _atteints = player.multiTier + (player._multiPendingTier | 0);
+            if (totalSac > 0 && _atteints < 10) {
                 player.multiProgress = (player.multiProgress || 0) + rate * totalSac * dt;
-                const tierCost = (player.multiTier + 1) * 100;
+                const tierCost = (_atteints + 1) * 100;
                 if (player.multiProgress >= tierCost) {
                     player.multiProgress = 0;
-                    player._multiPendingTier = true;
+                    player._multiPendingTier = (player._multiPendingTier | 0) + 1;
                     if (state._io && state._roomId) {
                         state._io.to(state._roomId).emit('multi_pending', { slot: player.id });
                     }
@@ -1031,15 +1045,21 @@ function campDe(body, slot) {
 }
 
 /* CONTRE-ATTAQUE GENERALE (touche R du client). Sur chacun de ses astres ou
-   un autre tient du terrain, les zones du joueur engagent juste ce qu'il faut
-   pour le reprendre - cases etrangeres multipliees par le prix du sol - et
-   pas une spore de plus. Rien a falsifier : le client ne fait que demander,
+   un autre tient du terrain, chaque zone du joueur engage son POURCENTAGE
+   D'ENVOI (A / E cote client), comme un jet ; ce qui ne trouve rien a acheter
+   reste dans la zone. Rien a falsifier : le client ne fait que demander,
    le serveur calcule et n'engage que ce que les zones ont. */
 /* nomCible : l'astre sous le curseur du joueur, ou rien du tout. Le client
    l'envoie par son nom - c'est le seul identifiant que les deux cotes
    partagent a coup sur. */
 function riposteGenerale(state, slot, nomCible) {
     let astres = 0;
+    /* Le POURCENTAGE D'ENVOI du joueur, comme pour un jet : chaque zone en
+       engage cette part. C'est un budget - chaque case reprise se paie au
+       prix du sol, le reste demeure dans la zone. A 0 %, rien ne part. */
+    const joueur = state.players[slot] || state.players.find(p => p.id === slot);
+    const ratio = (joueur && joueur.jetRatio !== undefined) ? joueur.jetRatio : (state.jetRatio || 0.5);
+    if (!(ratio > 0)) return 0;
     const tous = state.allBodies || [];
     let bodies = tous;
     if (nomCible) {
@@ -1070,12 +1090,11 @@ function riposteGenerale(state, slot, nomCible) {
             dispo += liste[k].z.spores;
         }
         const cout = coutCase(body, total);
-        if (!miennes.length || dispo < cout) continue;
+        if (!miennes.length || dispo * ratio < cout) continue;
 
-        const part = Math.min(1, (etrangeres * cout) / dispo);
         for (let k = 0; k < miennes.length; k++) {
             const z = miennes[k];
-            z.elan = Math.max(z.elan || 0, z.spores * part);
+            z.elan = Math.max(z.elan || 0, z.spores * ratio);
         }
         L.dormante = false;
         astres++;
