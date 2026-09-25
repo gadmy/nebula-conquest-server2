@@ -4,6 +4,12 @@ const { Server } = require('socket.io');
 const RoomManager = require('./roomManager');
 const TournamentManager = require('./tournamentManager');
 const { createClient } = require('@supabase/supabase-js');
+const S = require('./securite');
+
+/* Une exception dans un gestionnaire ne doit jamais abattre le serveur -
+   et avec lui toutes les parties en cours. On la journalise et on continue. */
+process.on('uncaughtException', (e) => console.error('[ERREUR non rattrapee]', e && e.stack || e));
+process.on('unhandledRejection', (e) => console.error('[PROMESSE rejetee]', e && e.stack || e));
 
 // ── Supabase (service_role, serveur uniquement) ──────────────
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -76,11 +82,45 @@ const io = new Server(server, {
   cors: { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
 });
 
+io.use((socket, next) => {
+  const a = socket.handshake.auth || {};
+  const annonce = S.pseudo(a.pseudo);
+  const teinte = S.couleur(a.color, '#C084FC');
+  const invite = () => {
+    socket.data.profile = {
+      pseudo: supa ? 'Invite-' + socket.id.replace(/[^A-Za-z0-9]/g, '').slice(0, 4) : (annonce || 'Joueur'),
+      color: teinte, userId: null, verifie: false
+    };
+    next();
+  };
+  if (!supa || typeof a.token !== 'string' || a.token.length > 4096) return invite();
+  supa.auth.getUser(a.token).then(({ data, error }) => {
+    const u = data && data.user;
+    if (error || !u) return invite();
+    return supa.from('profiles').select('*').eq('id', u.id).maybeSingle().then(({ data: pr }) => {
+      socket.data.profile = {
+        pseudo: S.pseudo(pr && pr.pseudo) || annonce || ('Joueur-' + u.id.slice(0, 4)),
+        color:  S.couleur(pr && (pr.avatar_color || pr.color), teinte),
+        userId: u.id,
+        verifie: true
+      };
+      next();
+    });
+  }).catch(() => invite());
+});
+
 const GameLoop = require('./gameLoop').GameLoop;
 const roomManager = new RoomManager();
 const gameLoops = new Map(); // roomId → GameLoop
 const tournamentManager = new TournamentManager();
 const pseudoToSocket = new Map();
+const invitations = new Map();        // 'socketDe>socketVers' -> date (classe)
+const invitationsLocales = new Map(); // 'salle>socketVers' -> date (partie privee)
+setInterval(() => {                   /* on ne garde pas les invitations perimees */
+  const t = Date.now();
+  for (const [k, v] of invitations) if (t - v > 120000) invitations.delete(k);
+  for (const [k, v] of invitationsLocales) if (t - v > 600000) invitationsLocales.delete(k);
+}, 60000);
 const socketToUserId = new Map();
 
 // Fin de manche ranked : score best-of-3 autoritaire + ELO en fin de match
@@ -104,27 +144,78 @@ function handleRankedManche(roomId, winnerSlot) {
             io.to(roomId).emit('ranked_match_over', { winnerSlot: winSlot, scores, elo });
         });
     } else {
+        room.status = 'waiting';     /* la manche suivante pourra demarrer */
         io.to(roomId).emit('ranked_manche_result', { winnerSlot, scores });
     }
 }
 
+/* TOURNOI : c'est le serveur qui designe le vainqueur d'un match, d'apres
+   la fin de partie qu'il a lui-meme constatee. Le client l'annoncait, et
+   n'importe qui pouvait declarer n'importe quel vainqueur. */
+function handleTournamentEnd(roomId, winnerSlot) {
+    const room = roomManager._getRoom(roomId);
+    const t = tournamentManager.tournament;
+    if (!room || !t) return;
+    const slot = room.slots.find(s => s.slot === winnerSlot);
+    const match = t.bracket.find(m => m.roomId === roomId);
+    if (!slot || !match) return;
+    const result = tournamentManager.reportResult(match.matchId, slot.pseudo);
+    if (result) {
+        io.to('tournament').emit('tournament_update', tournamentManager.getState());
+        if (result.finished) {
+            io.to('tournament').emit('tournament_finished', { champion: result.champion });
+            setTimeout(() => tournamentManager.reset(), 30000);
+        }
+    }
+}
+
+/* Fin de partie, une seule fois par partie, quelle qu'en soit la cause. */
+function finDePartie(roomId, loop, winnerSlot) {
+    if (!loop || !loop.state || loop.state._resultatTransmis) return;
+    loop.state._resultatTransmis = true;
+    if (roomId.startsWith('ranked-')) handleRankedManche(roomId, winnerSlot);
+    else if (roomId.startsWith('tournament-')) handleTournamentEnd(roomId, winnerSlot);
+}
+
+/* IDENTITE. Le pseudo et l'identifiant venaient du client, sans controle :
+   on pouvait se connecter sous le nom de n'importe qui - et faire perdre des
+   points de classement a son compte. Le client envoie maintenant son jeton de
+   session Supabase ; le serveur le fait verifier et lit le pseudo dans la
+   base. Sans jeton valide, on est un invite : pas de classe, pas de tournoi. */
+
+
 io.on('connection', (socket) => {
-const profile = {
-    pseudo: socket.handshake.auth?.pseudo || 'Joueur',
-    color:  socket.handshake.auth?.color  || '#C084FC',
-  userId: socket.handshake.auth?.userId || null
-  };
+  const profile = socket.data.profile;
   pseudoToSocket.set(profile.pseudo.toLowerCase(), socket.id);
+
+  /* Toute ecoute passe par ici : debit limite par socket, charge utile
+     toujours un objet, et une exception reste dans son gestionnaire. */
+  const _lim = S.limiteur();
+  const ecouter = (evt, fn) => socket.on(evt, (arg) => {
+    if (!S.accepter(_lim)) {
+      if (S.aExclure(_lim)) {
+        console.warn(`[ANTICHEAT] ${profile.pseudo} deconnecte : inondation de messages`);
+        socket.disconnect(true);
+      }
+      return;
+    }
+    try { fn((arg && typeof arg === 'object' && !Array.isArray(arg)) ? arg : {}); }
+    catch (e) { console.error(`[ERREUR] ${evt} (${profile.pseudo}) :`, e && e.message); }
+  });
+  /* Classe et tournoi exigent une identite verifiee - sauf en local, sans
+     base configuree, pour pouvoir tester. */
+  const identifie = () => !supa || profile.verifie;
   if (profile.userId) socketToUserId.set(socket.id, profile.userId);
 
   console.log(`[+] ${profile.pseudo} (${socket.id})`);
 
   // TOURNOI
-  socket.on('tournament_state', () => {
+  ecouter('tournament_state', () => {
     socket.emit('tournament_update', tournamentManager.getState());
   });
 
-socket.on('tournament_register', () => {
+ecouter('tournament_register', () => {
+    if (!identifie()) { socket.emit('tournament_error', { msg: 'Connectez-vous pour participer au tournoi' }); return; }
     const result = tournamentManager.register(profile.pseudo, profile.color, socket.id);
     if (result.error) { socket.emit('tournament_error', { msg: result.error }); return; }
     socket.join('tournament');
@@ -162,24 +253,18 @@ socket.on('tournament_register', () => {
     }
   });
 
-  socket.on('tournament_result', ({ matchId, winnerPseudo }) => {
-    const result = tournamentManager.reportResult(matchId, winnerPseudo);
-    if (result) {
-      io.to('tournament').emit('tournament_update', tournamentManager.getState());
-      if (result.finished) {
-        io.to('tournament').emit('tournament_finished', { champion: result.champion });
-        setTimeout(() => tournamentManager.reset(), 30000);
-      }
-    }
-  });
+  /* Ignore : le vainqueur d'un match est constate par le serveur
+     (handleTournamentEnd). Garde pour ne pas gener les anciens clients. */
+  ecouter('tournament_result', () => {});
 
 // MULTI
-  socket.on('multi_queue', () => { roomManager.joinMultiQueue(socket, profile); });
-  socket.on('multi_queue_leave', () => { roomManager.leaveMultiQueue(socket.id); socket.emit('queue_left'); });
+  ecouter('multi_queue', () => { roomManager.joinMultiQueue(socket, profile); });
+  ecouter('multi_queue_leave', () => { roomManager.leaveMultiQueue(socket.id); socket.emit('queue_left'); });
 
   // RANKED 1v1
-socket.on('ranked_queue', () => {
+ecouter('ranked_queue', () => {
     console.log(`[RANKED] ranked_queue reçu de ${profile.pseudo}`);
+    if (!identifie()) { socket.emit('ranked_invite_error', { msg: 'Connectez-vous pour jouer en classé' }); return; }
     if (profile._rankedBanUntil && Date.now() < profile._rankedBanUntil) {
       const remaining = Math.ceil((profile._rankedBanUntil - Date.now()) / 1000);
       socket.emit('ranked_invite_error', { msg: `Cooldown anti-déconnexion : ${remaining}s restantes` });
@@ -196,23 +281,39 @@ socket.on('ranked_queue', () => {
     }
   });
 
-  socket.on('ranked_queue_leave', () => {
+  ecouter('ranked_queue_leave', () => {
     roomManager.leaveRankedQueue(socket.id);
     socket.emit('ranked_queue_left');
   });
 
-  socket.on('ranked_invite', ({ targetPseudo }) => {
-    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
-    if (!targetSocketId) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
+  ecouter('ranked_invite', ({ targetPseudo }) => {
+    if (!identifie()) { socket.emit('ranked_invite_error', { msg: 'Connectez-vous pour jouer en classé' }); return; }
+    const cible = S.pseudo(targetPseudo);
+    const targetSocketId = cible && pseudoToSocket.get(cible.toLowerCase());
+    if (!targetSocketId || targetSocketId === socket.id) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
+    /* L'invitation est retenue : seul celui qu'on a invite pourra
+       l'accepter, et seulement pendant deux minutes. */
+    invitations.set(socket.id + '>' + targetSocketId, Date.now());
     io.to(targetSocketId).emit('ranked_invite_received', { fromPseudo: profile.pseudo, fromColor: profile.color });
   });
 
-  socket.on('ranked_invite_accept', ({ fromPseudo }) => {
-    const fromSocketId = pseudoToSocket.get(fromPseudo.toLowerCase());
+  ecouter('ranked_invite_accept', ({ fromPseudo }) => {
+    if (!identifie()) { socket.emit('ranked_invite_error', { msg: 'Connectez-vous pour jouer en classé' }); return; }
+    const de = S.pseudo(fromPseudo);
+    const fromSocketId = de && pseudoToSocket.get(de.toLowerCase());
     if (!fromSocketId) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable' }); return; }
+    /* Accepter une invitation qui n'a jamais ete envoyee forcait un match
+       classe - et ses points - avec n'importe qui. */
+    const cle = fromSocketId + '>' + socket.id;
+    const quand = invitations.get(cle);
+    invitations.delete(cle);
+    if (!quand || Date.now() - quand > 120000) { socket.emit('ranked_invite_error', { msg: 'Invitation expirée' }); return; }
+    const autre = io.sockets.sockets.get(fromSocketId);
+    const pa = autre && autre.data && autre.data.profile;
+    if (!pa) { socket.emit('ranked_invite_error', { msg: 'Joueur introuvable' }); return; }
     const maps = roomManager.pickRankedMaps();
     const roomId = 'ranked-' + Math.random().toString(36).slice(2, 8);
-    const p1 = { pseudo: fromPseudo, color: '#C084FC', socketId: fromSocketId, userId: socketToUserId.get(fromSocketId) || null };
+    const p1 = { pseudo: pa.pseudo, color: pa.color, socketId: fromSocketId, userId: pa.userId || null };
     const p2 = { pseudo: profile.pseudo, color: profile.color, socketId: socket.id, userId: profile.userId || null };
     roomManager.createTournamentRoom(roomId, p1, p2);
     io.to(fromSocketId).emit('ranked_matched', { roomId, slot: 0, opponent: { pseudo: p2.pseudo, color: p2.color }, maps });
@@ -220,21 +321,27 @@ socket.on('ranked_queue', () => {
     console.log(`[RANKED] invite ${p1.pseudo} vs ${p2.pseudo} — room=${roomId}`);
   });
 
-  socket.on('ranked_invite_declined', ({ targetPseudo }) => {
-    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
+  ecouter('ranked_invite_declined', ({ targetPseudo }) => {
+    const cible = S.pseudo(targetPseudo);
+    const targetSocketId = cible && pseudoToSocket.get(cible.toLowerCase());
     if (targetSocketId) io.to(targetSocketId).emit('ranked_invite_declined', { fromPseudo: profile.pseudo });
   });
 
 // ranked_result ignoré — le serveur détermine le gagnant via game_over
-  // socket.on('ranked_result', ...) supprimé anti-triche
+  // ecouter('ranked_result', ...) supprimé anti-triche
 
   // LOCAL
-  socket.on('local_create', () => {
+  ecouter('local_create', () => {
     const room = roomManager.createLocalRoom(socket, profile);
     socket.emit('local_created', { roomId: room.id, slot: 0, players: room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) });
   });
 
-  socket.on('local_join', ({ roomId }) => {
+  ecouter('local_join', ({ roomId }) => {
+    /* On ne rejoint une salle privee que sur invitation. */
+    const cle = (typeof roomId === 'string' ? roomId : '') + '>' + socket.id;
+    const quand = invitationsLocales.get(cle);
+    if (!quand || Date.now() - quand > 600000) { socket.emit('error', { msg: 'Invitation requise' }); return; }
+    invitationsLocales.delete(cle);
     const result = roomManager.joinLocalRoom(socket, profile, roomId);
     if (result.error) { socket.emit('error', { msg: result.error }); return; }
     const players = result.room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color }));
@@ -243,7 +350,17 @@ socket.on('ranked_queue', () => {
   });
 
   // EN JEU
-socket.on('game_start', ({ roomId, universe }) => {
+ecouter('game_start', ({ roomId, universe }) => {
+    /* Seul l'HOTE de SA salle lance la partie, une seule fois. N'importe qui
+       pouvait relancer la salle d'un autre avec l'univers de son choix. */
+    if (typeof roomId !== 'string' || roomManager.socketToRoom.get(socket.id) !== roomId) return;
+    const salle = roomManager._getRoom(roomId);
+    if (!salle || salle.status !== 'waiting' || gameLoops.has(roomId)) return;
+    const hote = salle.slots.find(s => s.slot === (salle.hostSlot || 0));
+    if (!hote || hote.socketId !== socket.id) return;
+    /* L'univers est borne et remis a zero (voir securite.js) : l'hote ne
+       fixe plus ni ses statistiques ni la taille des planetes. */
+    universe = S.nettoyerUnivers(universe, salle);
     const room = roomManager.startGame(roomId, universe);
     if (!room) { socket.emit('error', { msg: 'Room introuvable' }); return; }
     console.log(`[game_start] room=${roomId} slots=${room.slots.length} universe=${!!universe}`);
@@ -264,8 +381,9 @@ if (!gameLoops.has(roomId)) {
         loop.state._rankedManche = room._rankedManche || 0;
         room._rankedManche = (room._rankedManche || 0) + 1;
         if (!room._rankedScores) room._rankedScores = [0, 0];
-        loop.state._onRankedManche = (winnerSlot) => handleRankedManche(roomId, winnerSlot);
       }
+      /* Fin de partie constatee par le serveur : classe, tournoi. */
+      loop.state._onGameOver = (winnerSlot) => finDePartie(roomId, loop, winnerSlot);
       // Associer socketId → slot sur chaque player
       for (const s of room.slots) {
         const p = loop.state.players.find(p => p.id === s.slot);
@@ -275,7 +393,7 @@ if (!gameLoops.has(roomId)) {
     }
   });
 
-socket.on('player_action', (data) => {
+ecouter('player_action', (data) => {
     const roomId = roomManager.socketToRoom.get(socket.id);
     if (!roomId) return;
     const loop = gameLoops.get(roomId);
@@ -296,7 +414,7 @@ socket.on('player_action', (data) => {
     loop.handleInput(socket.id, data);
 });
 
-  socket.on('spawn_ready', () => {
+  ecouter('spawn_ready', () => {
     const roomId = roomManager.socketToRoom.get(socket.id);
     if (!roomId) return;
     const room = roomManager._getRoom(roomId);
@@ -310,40 +428,40 @@ socket.on('player_action', (data) => {
     }
   });
 
-  socket.on('game_snapshot', (snapshot) => {
-    const roomId = roomManager.socketToRoom.get(socket.id);
-    if (!roomId) return;
-    socket.to(roomId).emit('game_snapshot', snapshot);
-  });
-
-socket.on('game_end', (data) => {
-    const roomId = roomManager.socketToRoom.get(socket.id);
-    if (!roomId) return;
-    io.to(roomId).emit('game_end', data);
-  });
+  /* Supprimes : game_snapshot et game_end etaient relayes tels quels aux
+     autres joueurs. Le jeu ne les envoie jamais - l'etat vient du serveur -
+     ils ne servaient qu'a afficher un faux etat ou une fausse fin chez
+     l'adversaire. */
 
   // Intercepter game_over pour les rooms ranked
   // (émis par gameLoop._checkVictory, on l'écoute via io.on)
 
   // DÉCONNEXION
-  socket.on('invite_declined', ({ targetPseudo }) => {
-    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
+  ecouter('invite_declined', ({ targetPseudo }) => {
+    const cible = S.pseudo(targetPseudo);
+    const targetSocketId = cible && pseudoToSocket.get(cible.toLowerCase());
     if (targetSocketId) io.to(targetSocketId).emit('invite_declined', { fromPseudo: profile.pseudo });
   });
 
-socket.on('player_ready', ({ roomId }) => {
+ecouter('player_ready', ({ roomId }) => {
+    if (typeof roomId !== 'string' || roomManager.socketToRoom.get(socket.id) !== roomId) return;
     const room = roomManager._getRoom(roomId);
     const players = room ? room.slots.map(s => ({ slot: s.slot, pseudo: s.pseudo, color: s.color })) : [];
     socket.to(roomId).emit('player_ready', { players });
   });
 
-  socket.on('register_pseudo', ({ pseudo }) => {
-    if (pseudo) pseudoToSocket.set(pseudo.toLowerCase(), socket.id);
+  /* Le pseudo annonce est ignore : on ne s'inscrit que sous le sien. Sinon
+     on detournait les invitations destinees a un autre. */
+  ecouter('register_pseudo', () => {
+    pseudoToSocket.set(profile.pseudo.toLowerCase(), socket.id);
   });
 
-  socket.on('local_invite', ({ roomId, targetPseudo }) => {
-    const targetSocketId = pseudoToSocket.get(targetPseudo.toLowerCase());
-    if (!targetSocketId) { socket.emit('invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
+  ecouter('local_invite', ({ roomId, targetPseudo }) => {
+    if (typeof roomId !== 'string' || roomManager.socketToRoom.get(socket.id) !== roomId) return;
+    const cible = S.pseudo(targetPseudo);
+    const targetSocketId = cible && pseudoToSocket.get(cible.toLowerCase());
+    if (!targetSocketId || targetSocketId === socket.id) { socket.emit('invite_error', { msg: 'Joueur introuvable ou non connecté' }); return; }
+    invitationsLocales.set(roomId + '>' + targetSocketId, Date.now());
     io.to(targetSocketId).emit('invite_received', { roomId, fromPseudo: profile.pseudo });
   });
 
@@ -394,6 +512,9 @@ const result = roomManager.handleDisconnect(socket.id);
             reason: 'disconnect',
             stats: { timeElapsed: loop.state.time }
           });
+          /* Abandon = victoire de celui qui reste, au classement comme au
+             tournoi. Avant, quitter une manche perdue ne coutait rien. */
+          finDePartie(roomId, loop, aliveHumans[0].id);
         } else if (aliveHumans.length === 0) {
           // Match nul (tous déconnectés simultanément)
           loop.state._gameOver = true;

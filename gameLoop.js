@@ -37,8 +37,25 @@ start(universe) {
         console.log(`[GameLoop] room=${this.roomId} arrêtée`);
     }
 handleInput(socketId, ev) {
-        if (!this.state || !ev?.type) return;
+        if (!this.state || !ev || typeof ev !== 'object' || typeof ev.type !== 'string') return;
         const state = this.state;
+
+        /* CONTROLE DES CHAMPS, avant toute action. Tout vient du client : un
+           NaN dans une direction empoisonnait la trajectoire, un objet a la
+           place d'un nom faisait planter une comparaison. */
+        const _fini = (v) => typeof v === 'number' && isFinite(v);
+        for (const k of ['srcName', 'bodyName', 'stat', 'sporeType', 'mode']) {
+            if (ev[k] !== undefined && ev[k] !== null && (typeof ev[k] !== 'string' || ev[k].length > 60)) return;
+        }
+        if (ev.dirX !== undefined || ev.dirY !== undefined) {
+            if (!_fini(ev.dirX) || !_fini(ev.dirY)) return;
+            const l = Math.hypot(ev.dirX, ev.dirY);
+            if (l < 1e-6) return;
+            ev.dirX /= l; ev.dirY /= l;            /* toujours une direction unitaire */
+        }
+        for (const k of ['zx', 'zy']) if (ev[k] !== undefined && !_fini(ev[k])) ev[k] = undefined;
+        if (ev.type === 'aim' && (!_fini(ev.tx) || !_fini(ev.ty))) return;
+        if (ev.sporeType !== undefined && !['normal', 'parasite'].includes(ev.sporeType)) ev.sporeType = 'normal';
 
 if (ev.type === 'jet') {
             const src = state.planets.find(p => p.name === ev.srcName)
@@ -183,8 +200,10 @@ if (ev.type === 'set_conquest_buildings') {
         }
 
         if (ev.type === 'spawn_done') {
-            const slot = ev.slot !== undefined ? ev.slot : state.players.findIndex(p => p.socketId === socketId);
-            if (slot >= 0 && state.players[slot]) state.players[slot]._spawnDone = true;
+            /* Le slot vient du SOCKET : annonce par le client, il permettait
+               de declarer "pret" a la place d'un autre. */
+            const _moi = state.players.find(p => p.socketId === socketId);
+            if (_moi) _moi._spawnDone = true;
             const humanPlayers = state.players.filter(p => p.isHuman);
             const allDone = humanPlayers.every(p => p._spawnDone);
             if (allDone) this.io.to(this.roomId).emit('all_spawned');
@@ -219,7 +238,8 @@ if (ev.type === 'multi') {
                autre. Le serveur verifie donc l'un ou l'autre. */
             const _chez = body && player && Number(body.owner) === Number(player.id);
             const _pied = body && player && body.lutte && zonesDe(body, player.id).length > 0;
-            if (_chez || _pied) {
+            const _modes = ['off', 'nid', 'biome', 'alveole', 'parasite'];
+            if ((_chez || _pied) && _modes.includes(ev.mode || 'off')) {
                 body.buildMode = ev.mode || 'off';
                 body.buildSlot = player.id;
                 body.buildProgress = 0;
@@ -2254,6 +2274,9 @@ function _checkVictory(state, io, roomId) {
                 reason: 'time',
                 stats: { timeElapsed: state.time }
             });
+            /* La victoire au temps compte elle aussi : elle n'etait transmise
+               ni au classement ni au tournoi. */
+            if (state._onGameOver) state._onGameOver(best.id, 'time');
             return;
         }
     }
@@ -2287,10 +2310,8 @@ if (alivePlayers.length === 1) {
             reason: 'last_standing',
             stats: { timeElapsed: state.time }
         });
-// Résultat de manche géré par le serveur (score best-of-3 + ELO)
-        if (roomId.startsWith('ranked-') && state._onRankedManche) {
-            state._onRankedManche(alivePlayers[0].id);
-        }
+// Résultat géré par le serveur : manche classée (best-of-3 + ELO), tournoi
+        if (state._onGameOver) state._onGameOver(alivePlayers[0].id, 'last_standing');
         return;
     }
 
@@ -2309,9 +2330,7 @@ if (owned / totalBodies >= 0.8) {
                 reason: 'domination',
                 stats: { timeElapsed: state.time }
             });
-if (roomId.startsWith('ranked-') && state._onRankedManche) {
-                state._onRankedManche(player.id);
-            }
+            if (state._onGameOver) state._onGameOver(player.id, 'domination');
             return;
         }
     }
