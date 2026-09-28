@@ -240,6 +240,13 @@ if (ev.type === 'riposte') {
                 typeof ev.bodyName === 'string' ? ev.bodyName : null);
             return;
         }
+/* ARRET (touche T) : les zones du joueur cessent de pousser. */
+if (ev.type === 'arret') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) arreterAttaques(state, player.id,
+                typeof ev.bodyName === 'string' ? ev.bodyName : null);
+            return;
+        }
 
 if (ev.type === 'aim_end') {
             const player = state.players.find(p => p.socketId === socketId);
@@ -1266,6 +1273,22 @@ function campDe(body, slot) {
 /* nomCible : l'astre sous le curseur du joueur, ou rien du tout. Le client
    l'envoie par son nom - c'est le seul identifiant que les deux cotes
    partagent a coup sur. */
+/* ARRET DES ATTAQUES (touche T) : sur l'astre vise, ou partout, les zones
+   du joueur perdent leur elan - elles cessent de pousser. Rien n'est perdu :
+   l'elan n'est qu'un budget, les spores restent dans la zone. */
+function arreterAttaques(state, slot, nomCible) {
+    const tous = state.allBodies || [];
+    const bodies = nomCible ? tous.filter(x => x.name === nomCible) : tous;
+    let n = 0;
+    for (const body of bodies) {
+        if (!body.lutte || !body.lutte.zones) continue;
+        for (const m of zonesDe(body, slot)) {
+            if (m.z.elan > 0) { m.z.elan = 0; n++; }
+        }
+    }
+    return n;
+}
+
 function riposteGenerale(state, slot, nomCible) {
     let astres = 0;
     /* Le POURCENTAGE D'ENVOI du joueur, comme pour un jet : chaque zone en
