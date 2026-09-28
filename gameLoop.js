@@ -54,7 +54,8 @@ handleInput(socketId, ev) {
             ev.dirX /= l; ev.dirY /= l;            /* toujours une direction unitaire */
         }
         for (const k of ['zx', 'zy']) if (ev[k] !== undefined && !_fini(ev[k])) ev[k] = undefined;
-        if (ev.type === 'aim' && (!_fini(ev.tx) || !_fini(ev.ty))) return;
+        if ((ev.type === 'aim' || ev.type === 'rafale_debut' || ev.type === 'rafale_cible')
+            && (!_fini(ev.tx) || !_fini(ev.ty))) return;
         if (ev.sporeType !== undefined && !['normal', 'parasite'].includes(ev.sporeType)) ev.sporeType = 'normal';
 
 if (ev.type === 'jet') {
@@ -118,6 +119,35 @@ if (ev.type === 'aim') {
                 player._visee.tx = ev.tx;
                 player._visee.ty = ev.ty;
             }
+        }
+
+/* RAFALE (Ctrl + clic cote client). Le client annonce le debut, la cible et
+   la fin ; c'est le serveur qui cadence et tire - 8 paquets de 10 spores par
+   seconde, dispersion tiree ici. Un client ne peut donc ni accelerer la
+   mitrailleuse ni choisir ses angles. */
+if (ev.type === 'rafale_debut') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player || !player.alive) return;
+            const src = state.planets.find(p => p.name === ev.srcName)
+                     || state.moons.find(m => m.name === ev.srcName);
+            if (!src) return;
+            if (src.owner !== player.id && !(src.lutte && zonesDe(src, player.id).length)) return;
+            player._rafale = { src: src, tx: ev.tx, ty: ev.ty, zx: ev.zx, zy: ev.zy,
+                               acc: 1 / RAFALE_CADENCE, vu: state.time };
+            return;
+        }
+if (ev.type === 'rafale_cible') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player && player._rafale) {
+                player._rafale.tx = ev.tx; player._rafale.ty = ev.ty;
+                player._rafale.vu = state.time;
+            }
+            return;
+        }
+if (ev.type === 'rafale_fin') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) player._rafale = null;
+            return;
         }
 
 if (ev.type === 'jet_surface') {
@@ -247,6 +277,39 @@ if (ev.type === 'multi') {
         }
     }
 
+    /* Les rafales en cours : le serveur tire lui-meme, a sa cadence. Sans
+       nouvelles du client pendant 2 s (onglet ferme, coupure), on arrete. */
+    _rafales(dt) {
+        const state = this.state;
+        for (const player of state.players) {
+            const R = player._rafale;
+            if (!R) continue;
+            if (!player.alive || state._gameOver || state.time - R.vu > 2) { player._rafale = null; continue; }
+            R.acc += dt;
+            while (R.acc >= 1 / RAFALE_CADENCE) {
+                R.acc -= 1 / RAFALE_CADENCE;
+                /* En visee chez soi, c'est le lanceur du groupe qui tire. */
+                let tireur = R.src;
+                const vis = player._visee;
+                if (vis && vis.lanceur && vis.lanceur.owner === player.id &&
+                    _groupeTir(vis.src).indexOf(vis.lanceur) >= 0) tireur = vis.lanceur;
+                const dx = R.tx - tireur.x, dy = R.ty - tireur.y;
+                if (dx * dx + dy * dy < 100) continue;
+                const a = Math.atan2(dy, dx) + ((state._gameRng ? state._gameRng() : Math.random()) * 2 - 1) * RAFALE_ECART;
+                const n0 = state.jets.length;
+                launchJet(state, tireur, Math.cos(a), Math.sin(a), 'normal', player.id, R.zx, R.zy, RAFALE_PAQUET);
+                if (state.jets.length === n0) { player._rafale = null; break; }   /* plus de quoi tirer */
+                const jet = state.jets[state.jets.length - 1];
+                this.io.to(this.roomId).emit('jet_fired', {
+                    srcName: tireur.name, dirX: Math.cos(a), dirY: Math.sin(a),
+                    sporeType: 'normal', owner: player.id, slot: player.id,
+                    spores: jet.spores, color: jet.color, speed: jet.speed,
+                    id: jet.id, trajectory: jet.trajectory, rafale: true,
+                });
+            }
+        }
+    }
+
     _step(dt) {
         if (!this.state) return;
         this._tick++;
@@ -259,6 +322,7 @@ if (ev.type === 'multi') {
         updateComets(this.state, dt);
         updateCleaners(this.state, dt);
         majChargementTir(this.state, dt);
+        this._rafales(dt);
         if (this._tick % 2 === 0) updateAI(this.state, 50 / 1000);
 
      // Snapshot toutes les 2 ticks = 100ms
@@ -1147,6 +1211,9 @@ function majLuttes(state, dt) {
    c'est perdre les spores qui etaient dessus.
    ───────────────────────────────────────────── */
 const ZONE_MIN = 10;
+const RAFALE_CADENCE = 8;                    /* paquets par seconde */
+const RAFALE_PAQUET = 10;                    /* spores par paquet */
+const RAFALE_ECART = 20 * Math.PI / 180;     /* dispersion, de part et d'autre */
 const ZONE_FONTE = 0.5;
 const _zoneMarque = new Int16Array(LUTTE_N * LUTTE_N);
 const _zonePile = [];
@@ -2065,7 +2132,10 @@ function majChargementTir(state, dt) {
 
 /* Le tireur n'est pas forcement le proprietaire : on peut lancer depuis la
    tete de pont qu'on tient sur la planete de quelqu'un d'autre. */
-function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy) {
+/* nombre, facultatif : un nombre FIXE de spores (paquets de rafale) au lieu
+   du pourcentage d'envoi du joueur. */
+function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy, nombre) {
+    const _nb = nombre > 0 ? Math.floor(nombre) : 0;
     sporeType = sporeType || 'normal';
     const tireur = (slot === undefined || slot === null) ? source.owner : slot;
     const player = state.players[tireur];
@@ -2087,12 +2157,12 @@ function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy) {
                Sous dix cases, elle n'a pas de quoi organiser un depart. */
             const zt = zoneDeTir(source, tireur, zx, zy);
             if (!zt || zt.z.n < ZONE_MIN) return;
-            sporeCount = Math.floor(zt.z.spores * _ratio);
+            sporeCount = _nb ? (zt.z.spores >= _nb ? _nb : 0) : Math.floor(zt.z.spores * _ratio);
             if (sporeCount < 5) return;
             zt.z.spores -= sporeCount;
             zonesAgreger(source, source.lutte);
         } else {
-            sporeCount = Math.floor(source.spores * _ratio);
+            sporeCount = _nb ? (source.spores >= _nb ? _nb : 0) : Math.floor(source.spores * _ratio);
             if (sporeCount < 5) return;
             source.spores -= sporeCount;
         }
