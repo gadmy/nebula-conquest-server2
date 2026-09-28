@@ -92,7 +92,14 @@ const server = http.createServer((req, res) => {
 });
 
 const io = new Server(server, {
-  cors: { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
+  cors: { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] },
+  /* COMPRESSION des messages WebSocket. L'instantane de la partie (15 a
+     60 Ko, dix fois par seconde et par joueur) est du JSON tres repetitif :
+     compresse, il pese environ huit fois moins (mesure : 18 -> 2 Ko a deux
+     joueurs, 58 -> 6 Ko a seize). Les navigateurs decompressent d'eux-memes.
+     Les petits messages (moins de 1 Ko) partent tels quels : les compresser
+     couterait plus qu'ils ne pesent. */
+  perMessageDeflate: { threshold: 1024 }
 });
 
 io.use((socket, next) => {
