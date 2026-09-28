@@ -160,7 +160,10 @@ if (ev.type === 'boule_debut') {
                      || state.moons.find(m => m.name === ev.srcName);
             if (!src) return;
             if (src.owner !== player.id && !(src.lutte && zonesDe(src, player.id).length)) return;
-            player._boule = { src: src, tx: ev.tx, ty: ev.ty, zx: ev.zx, zy: ev.zy, n: 0,
+            /* Le zoom du client ne fait que RALENTIR la rotation (borne a
+               [0,25 ; 1]) : le tricher ne ferait jamais tourner plus vite. */
+            const _z = (typeof ev.z === 'number' && isFinite(ev.z)) ? Math.max(0.25, Math.min(1, ev.z)) : 1;
+            player._boule = { src: src, tx: ev.tx, ty: ev.ty, zx: ev.zx, zy: ev.zy, n: 0, z: _z,
                               angle: Math.atan2(ev.ty - src.y, ev.tx - src.x), vu: state.time };
             return;
         }
@@ -168,6 +171,7 @@ if (ev.type === 'boule_cible') {
             const player = state.players.find(p => p.socketId === socketId);
             if (player && player._boule) {
                 player._boule.tx = ev.tx; player._boule.ty = ev.ty; player._boule.vu = state.time;
+                if (typeof ev.z === 'number' && isFinite(ev.z)) player._boule.z = Math.max(0.25, Math.min(1, ev.z));
             }
             return;
         }
@@ -357,7 +361,8 @@ if (ev.type === 'multi') {
             let d = Math.atan2(B.ty - src.y, B.tx - src.x) - B.angle;
             while (d > Math.PI) d -= 2 * Math.PI;
             while (d < -Math.PI) d += 2 * Math.PI;
-            B.angle += Math.max(-BOULE_ROTATION * dt, Math.min(BOULE_ROTATION * dt, d));
+            const _v = BOULE_ROTATION * (B.z || 1) * dt;
+            B.angle += Math.max(-_v, Math.min(_v, d));
             let voulu = Math.min(BOULE_DEBIT * dt, BOULE_MAX - B.n);
             if (voulu <= 0) continue;
             const zt = src.lutte ? zoneDeTir(src, player.id, B.zx, B.zy) : null;
@@ -1312,7 +1317,7 @@ const RAFALE_ECART = 20 * Math.PI / 180;     /* dispersion, de part et d'autre *
 const BOULE_DEBIT = 25;                      /* spores chargees par seconde */
 const BOULE_MAX = 500;
 const BOULE_COUT = 2;                        /* prises a l'astre par spore chargee */
-const BOULE_ROTATION = 0.25;                 /* radians par seconde vers la souris : un demi-tour en 12 s */
+const BOULE_ROTATION = 0.15;                 /* radians par seconde vers la souris, au zoom 1 */
 const BOULE_VITESSE = 1.4;
 const BOULE_PAS = Math.round(200 * 2 / BOULE_VITESSE);
 const BOULE_GRAVITE = 0.25;
