@@ -549,6 +549,10 @@ planets: state.planets.map(p => ({
             vx:    Math.round(c.vx * 100) / 100,
             vy:    Math.round(c.vy * 100) / 100,
             angle: c.angle,
+            /* Duels : mort, vie, index de l'adversaire (-1 : aucun). */
+            m:     c.mort ? 1 : 0,
+            pv:    Math.round(c.pv === undefined ? DUEL_CFG.pv : c.pv),
+            d:     c._duel ? state.cleaners.indexOf(c._duel) : -1,
         })),
 time: state.time,
         orbits: state.suns.map(s => ({
@@ -1376,6 +1380,7 @@ const BOULE_PAS = Math.round(200 * 2 / BOULE_VITESSE);
 const BOULE_GRAVITE = 0.25;
 const BOULE_HAUTEUR = 1.35;
 const BRULURE_PRES = 2.2, BRULURE_TRES_PRES = 1.5;   /* en rayons d'etoile */
+const FRONDE_PORTEE = 2.5, FRONDE_MAX = 0.8;          /* fronde du trou noir */
 const BRULURE_LENTE = 1, BRULURE_FORTE = 5;          /* spores par seconde */
 const DEMOL_SPORES = 250;
 const DEMOL_VITESSE = 0.6;
@@ -1811,12 +1816,79 @@ function applyConquest(state, body, jet) {
 const COMET_CFG = { freq: 8, speed: 150, size: 8, tail: 80 };
 const CLN_CFG = { speedMin: 67, speedMax: 120, turnInterval: 15, detectRange: 120, fireRate: 0.3, dmgMin: 34, dmgMax: 106 };
 
+/* ─── Duels de vaisseaux ───────────────────────────────────────
+   Deux vaisseaux de couleurs differentes qui se croisent se prennent en
+   chasse et se tirent dessus ; le perdant explose, un vaisseau de sa couleur
+   reapparait ailleurs quelques instants plus tard. Les clients voient vie,
+   mort et adversaire dans l'instantane, et dessinent les lasers. */
+const DUEL_CFG = { detect: 380, rupture: 950, cadence: 0.45, dmgMin: 7, dmgMax: 15,
+                   precision: 0.7, pv: 100, reparation: 2, retourMin: 6, retourMax: 12 };
+
+function majDuels(state, dt) {
+    const L = state.cleaners;
+    if (!L || !L.length) return;
+    const alea = state._gameRng || Math.random;
+    const t = state.time;
+    for (const cl of L) {
+        if (cl.pv === undefined) cl.pv = DUEL_CFG.pv;
+        if (cl.mort) {
+            if (t >= cl.retour) {
+                const R = (state.universeRadius || 6000) * (0.3 + alea() * 0.4);
+                const a = alea() * Math.PI * 2;
+                cl.x = Math.cos(a) * R; cl.y = Math.sin(a) * R;
+                cl.vx = 0; cl.vy = 0; cl.turnTimer = 0; cl._target = null;
+                cl.pv = DUEL_CFG.pv; cl.mort = false; cl._duel = null;
+            }
+            continue;
+        }
+        if (!cl._duel && cl.pv < DUEL_CFG.pv) cl.pv = Math.min(DUEL_CFG.pv, cl.pv + DUEL_CFG.reparation * dt);
+    }
+    for (let i = 0; i < L.length; i++) {
+        const a = L[i];
+        if (a.mort || a._duel) continue;
+        for (let j = i + 1; j < L.length; j++) {
+            const b = L[j];
+            if (b.mort || b._duel || b.type === a.type) continue;
+            if (Math.hypot(a.x - b.x, a.y - b.y) < DUEL_CFG.detect) {
+                a._duel = b; b._duel = a;
+                a._tirT = DUEL_CFG.cadence * alea();
+                b._tirT = DUEL_CFG.cadence * alea();
+                break;
+            }
+        }
+    }
+    for (const cl of L) {
+        const o = cl._duel;
+        if (!o || cl.mort) continue;
+        const dx = o.x - cl.x, dy = o.y - cl.y, d = Math.hypot(dx, dy) || 1;
+        if (o.mort || d > DUEL_CFG.rupture) { cl._duel = null; if (!o.mort && o._duel === cl) o._duel = null; continue; }
+        const ang = Math.atan2(dy, dx) + (d < 160 ? 1.1 : 0.45);
+        const v = CLN_CFG.speedMax * 1.15;
+        cl.vx += (Math.cos(ang) * v - cl.vx) * Math.min(1, dt * 2.5);
+        cl.vy += (Math.sin(ang) * v - cl.vy) * Math.min(1, dt * 2.5);
+        cl._tirT -= dt;
+        if (cl._tirT <= 0 && d < DUEL_CFG.rupture * 0.6) {
+            cl._tirT = DUEL_CFG.cadence * (0.8 + alea() * 0.4);
+            if (alea() < DUEL_CFG.precision) {
+                o.pv -= DUEL_CFG.dmgMin + alea() * (DUEL_CFG.dmgMax - DUEL_CFG.dmgMin);
+                if (o.pv <= 0) {
+                    o.pv = 0; o.mort = true; o._duel = null; cl._duel = null;
+                    o.retour = t + DUEL_CFG.retourMin + alea() * (DUEL_CFG.retourMax - DUEL_CFG.retourMin);
+                }
+            }
+        }
+    }
+}
+
 // ─── updateCleaners (portée du client, UI neutralisée) ────────
 function updateCleaners(state, dt) {
     if (!state.cleaners || !state.cleaners.length) return;
     const bh = state.blackHole;
+    majDuels(state, dt);
 
     for (const cl of state.cleaners) {
+        if (cl.mort) continue;                 /* abattu en duel, en attente */
+        if (!cl._duel) {                       /* en duel, majDuels pilote */
         cl.turnTimer -= dt;
         if (cl.turnTimer <= 0) {
             cl.turnTimer = CLN_CFG.turnInterval + state._gameRng() * 5;
@@ -1846,6 +1918,7 @@ function updateCleaners(state, dt) {
                 const newSpeed = Math.sqrt(cl.vx * cl.vx + cl.vy * cl.vy);
                 if (newSpeed > currentSpeed * 1.2) { cl.vx = (cl.vx / newSpeed) * currentSpeed; cl.vy = (cl.vy / newSpeed) * currentSpeed; }
             }
+        }
         }
 
         cl.x += cl.vx * dt;
@@ -2029,6 +2102,20 @@ function updateJets(state, dt) {
             }
         }
 
+/* Fronde du trou noir : un tir qui le frole en ressort plus rapide, et le
+   garde (jusqu'a +80 % au ras de la zone qui detruit). Le trajet ne change
+   pas : le tir le parcourt plus vite. */
+        const bhF = state.blackHole;
+        if (bhF && !jet._surface) {
+            const d = Math.hypot(jet.x - bhF.x, jet.y - bhF.y);
+            const portee = bhF.dangerZone * FRONDE_PORTEE, mini = bhF.dangerZone * 0.4;
+            if (d < portee) {
+                if (jet._vBase === undefined) jet._vBase = jet.speed;
+                const f = 1 + FRONDE_MAX * Math.min(1, (portee - d) / (portee - mini));
+                if (f > (jet._fronde || 1)) { jet._fronde = f; jet.speed = jet._vBase * f; }
+            }
+        }
+
 /* Brulure des etoiles : pres d'une etoile un tir perd 1 spore/s, tres
    pres 5/s (distances en rayons de l'etoile, depuis son centre). */
         if (!jet._surface && jet.owner !== -1) {
@@ -2051,7 +2138,11 @@ function updateJets(state, dt) {
 
 // Traversée amas de météorites
         if (!jet._hitBelt) jet._hitBelt = {};
-        for (let bi = 0; bi < state.asteroidBelts.length; bi++) {
+        /* Un amas qui passe devant ou derriere l'astre de depart ne touche
+           pas le tir tant qu'il en sort. */
+        const _srcB = jet.source;
+        const _pres = _srcB && Math.hypot(jet.x - _srcB.x, jet.y - _srcB.y) < _srcB.radius * 1.6 + 40;
+        for (let bi = 0; !_pres && bi < state.asteroidBelts.length; bi++) {
             if (jet._hitBelt[bi]) continue;
             const belt = state.asteroidBelts[bi];
             const sun  = belt.sun || state.suns[belt.sunIndex] || null;
