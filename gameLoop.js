@@ -54,7 +54,8 @@ handleInput(socketId, ev) {
             ev.dirX /= l; ev.dirY /= l;            /* toujours une direction unitaire */
         }
         for (const k of ['zx', 'zy']) if (ev[k] !== undefined && !_fini(ev[k])) ev[k] = undefined;
-        if ((ev.type === 'aim' || ev.type === 'rafale_debut' || ev.type === 'rafale_cible')
+        if ((ev.type === 'aim' || ev.type === 'rafale_debut' || ev.type === 'rafale_cible'
+             || ev.type === 'boule_debut' || ev.type === 'boule_cible')
             && (!_fini(ev.tx) || !_fini(ev.ty))) return;
         if (ev.sporeType !== undefined && !['normal', 'parasite'].includes(ev.sporeType)) ev.sporeType = 'normal';
 
@@ -147,6 +148,37 @@ if (ev.type === 'rafale_cible') {
 if (ev.type === 'rafale_fin') {
             const player = state.players.find(p => p.socketId === socketId);
             if (player) player._rafale = null;
+            return;
+        }
+
+/* BOULE (Shift cote client). Le client annonce le debut, la souris, le
+   lacher ; le serveur charge (et fait payer double), tourne, et tire. */
+if (ev.type === 'boule_debut') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player || !player.alive || player._boule) return;
+            const src = state.planets.find(p => p.name === ev.srcName)
+                     || state.moons.find(m => m.name === ev.srcName);
+            if (!src) return;
+            if (src.owner !== player.id && !(src.lutte && zonesDe(src, player.id).length)) return;
+            player._boule = { src: src, tx: ev.tx, ty: ev.ty, zx: ev.zx, zy: ev.zy, n: 0,
+                              angle: Math.atan2(ev.ty - src.y, ev.tx - src.x), vu: state.time };
+            return;
+        }
+if (ev.type === 'boule_cible') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player && player._boule) {
+                player._boule.tx = ev.tx; player._boule.ty = ev.ty; player._boule.vu = state.time;
+            }
+            return;
+        }
+if (ev.type === 'boule_lancer') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player && player._boule) this._lancerBoule(player);
+            return;
+        }
+if (ev.type === 'boule_fin') {
+            const player = state.players.find(p => p.socketId === socketId);
+            if (player) player._boule = null;          /* dispersee : rien n'est rendu */
             return;
         }
 
@@ -310,6 +342,64 @@ if (ev.type === 'multi') {
         }
     }
 
+    /* Les boules en charge : rotation lente vers la souris, charge payee
+       double. Sans nouvelles du client 2 s, elle se disperse. */
+    _boules(dt) {
+        const state = this.state;
+        for (const player of state.players) {
+            const B = player._boule;
+            if (!B) continue;
+            const src = B.src;
+            if (!player.alive || state._gameOver || state.time - B.vu > 2
+                || (src.owner !== player.id && !(src.lutte && zonesDe(src, player.id).length))) {
+                player._boule = null; continue;
+            }
+            let d = Math.atan2(B.ty - src.y, B.tx - src.x) - B.angle;
+            while (d > Math.PI) d -= 2 * Math.PI;
+            while (d < -Math.PI) d += 2 * Math.PI;
+            B.angle += Math.max(-BOULE_ROTATION * dt, Math.min(BOULE_ROTATION * dt, d));
+            let voulu = Math.min(BOULE_DEBIT * dt, BOULE_MAX - B.n);
+            if (voulu <= 0) continue;
+            const zt = src.lutte ? zoneDeTir(src, player.id, B.zx, B.zy) : null;
+            const dispo = zt ? zt.z.spores : (src.spores || 0);
+            voulu = Math.min(voulu, dispo / BOULE_COUT);
+            if (voulu <= 0) continue;
+            if (zt) { zt.z.spores -= voulu * BOULE_COUT; zonesAgreger(src, src.lutte); }
+            else src.spores -= voulu * BOULE_COUT;
+            B.n += voulu;
+        }
+    }
+
+    _lancerBoule(player) {
+        const state = this.state;
+        const B = player._boule;
+        player._boule = null;
+        const n = Math.floor(B.n);
+        if (n < 5) return;
+        const src = B.src;
+        const h = src.radius * BOULE_HAUTEUR;
+        const bx = src.x + Math.cos(B.angle) * h, by = src.y + Math.sin(B.angle) * h;
+        const vitesse = (20 + player.stats.velocity * 6) * BOULE_VITESSE;
+        const traj = computeTrajectory(state, bx, by, Math.cos(B.angle), Math.sin(B.angle),
+                                       vitesse, BOULE_PAS, BOULE_GRAVITE);
+        const pl = src.type === 'moon' ? src.parent : src;
+        const groupe = pl ? [pl.name].concat((pl.moons || []).map(m => m.name)) : [src.name];
+        const jet = {
+            id: ++_jetIdCounter, owner: player.id, color: player.color, spores: n,
+            sporeType: 'normal', trajectory: traj, posIndex: 0,
+            x: bx, y: by, speed: vitesse, alive: true, trail: [], age: 0,
+            source: src, sourceName: src.name, _hitBelt: {},
+            boule: true, _groupe: groupe,
+        };
+        state.jets.push(jet);
+        this.io.to(this.roomId).emit('jet_fired', {
+            srcName: src.name, dirX: Math.cos(B.angle), dirY: Math.sin(B.angle),
+            sporeType: 'normal', owner: player.id, slot: player.id,
+            spores: n, color: jet.color, speed: vitesse, id: jet.id,
+            trajectory: traj, boule: true,
+        });
+    }
+
     _step(dt) {
         if (!this.state) return;
         this._tick++;
@@ -323,6 +413,7 @@ if (ev.type === 'multi') {
         updateCleaners(this.state, dt);
         majChargementTir(this.state, dt);
         this._rafales(dt);
+        this._boules(dt);
         if (this._tick % 2 === 0) updateAI(this.state, 50 / 1000);
 
      // Snapshot toutes les 2 ticks = 100ms
@@ -448,6 +539,10 @@ time: state.time,
         belts: state.asteroidBelts.map(b => ({
             a: Math.round((b.rocks[0]?.angle || 0) * 10000) / 10000,
             orbitSpeed: b.orbitSpeed,
+        })),
+        boules: state.players.filter(p => p._boule).map(p => ({
+            owner: p.id, src: p._boule.src.name,
+            a: Math.round(p._boule.angle * 1000) / 1000, n: Math.floor(p._boule.n),
         })),
 players: state.players.map(p => ({
             id:           p.id,
@@ -1214,6 +1309,14 @@ const ZONE_MIN = 10;
 const RAFALE_CADENCE = 8;                    /* paquets par seconde */
 const RAFALE_PAQUET = 10;                    /* spores par paquet */
 const RAFALE_ECART = 20 * Math.PI / 180;     /* dispersion, de part et d'autre */
+const BOULE_DEBIT = 25;                      /* spores chargees par seconde */
+const BOULE_MAX = 500;
+const BOULE_COUT = 2;                        /* prises a l'astre par spore chargee */
+const BOULE_ROTATION = 0.6;                  /* radians par seconde vers la souris */
+const BOULE_VITESSE = 1.4;
+const BOULE_PAS = Math.round(200 * 2 / BOULE_VITESSE);
+const BOULE_GRAVITE = 0.25;
+const BOULE_HAUTEUR = 1.35;
 const ZONE_FONTE = 0.5;
 const _zoneMarque = new Int16Array(LUTTE_N * LUTTE_N);
 const _zonePile = [];
@@ -1701,6 +1804,8 @@ function updateCleaners(state, dt) {
             cl.fireTimer = CLN_CFG.fireRate;
             for (const jet of state.jets) {
                 if (!jet.alive) continue;
+                /* Les vaisseaux rouges et noirs ne peuvent rien contre la boule. */
+                if (jet.boule && (cl.type === 'red' || cl.type === 'dark')) continue;
                 const dx = jet.x - cl.x, dy = jet.y - cl.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
                 if (dist < CLN_CFG.detectRange) {
@@ -1879,6 +1984,8 @@ function updateJets(state, dt) {
             }
             if (closestDist > 1600) continue;
             jet._hitBelt[bi] = true;
+            /* La boule traverse les amas rouges et noirs. */
+            if (jet.boule && (closestType === 'red' || closestType === 'dark')) continue;
             if (closestType === 'dark') {
                 const _tl1 = state.players[jet.owner]?.tech?.tenacity || 0;
                 jet.spores = Math.max(1, Math.floor(jet.spores * (0.5 + _tl1 * 0.05)));
@@ -1898,6 +2005,9 @@ function updateJets(state, dt) {
 // Collision avec les corps (ignorer la source pendant les 0.5 premières secondes)
         for (const body of state.allBodies) {
             if (jet.age < 0.5 && jet.sourceName && body.name === jet.sourceName) continue;
+            /* La boule part de l'atmosphere : sa premiere seconde, elle
+               traverse sa planete et les lunes de celle-ci. */
+            if (jet.boule && jet.age < 1 && jet._groupe && jet._groupe.indexOf(body.name) >= 0) continue;
             const dx   = jet.x - body.x;
             const dy   = jet.y - body.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1959,13 +2069,16 @@ function buyTech(player, branch) {
 }
 
 // ─── Trajectoire (portée du client) ──────────────────────────
-function computeTrajectory(state, startX, startY, dirX, dirY, speed) {
+/* nbPas et gravite, facultatifs : la boule va plus loin (plus de pas) et
+   ne subit qu'un quart de la gravite. */
+function computeTrajectory(state, startX, startY, dirX, dirY, speed, nbPas, gravite) {
     const bh     = state.blackHole;
     const points = [];
     let x = startX, y = startY;
     let vx = dirX * speed, vy = dirY * speed;
     const dt = 0.4;
-    const steps = 200;
+    const steps = nbPas > 0 ? nbPas : 200;
+    const gF = (gravite === undefined) ? 1 : gravite;
 
     for (let i = 0; i < steps; i++) {
         const dx   = bh.x - x, dy = bh.y - y;
@@ -1976,7 +2089,7 @@ function computeTrajectory(state, startX, startY, dirX, dirY, speed) {
         if (dist < gRange) {
             const G        = bh.gravityStrength || 500;
             const edgeFade = 1 - Math.pow(dist / gRange, 2);
-            const factor   = (G / (dist + 50)) * edgeFade * dt;
+            const factor   = (G / (dist + 50)) * edgeFade * dt * gF;
             vx += (dx / dist) * factor;
             vy += (dy / dist) * factor;
         }
@@ -1989,8 +2102,8 @@ function computeTrajectory(state, startX, startY, dirX, dirY, speed) {
                 const sG       = sun.radius * 2;
                 const sEdge    = 1 - Math.pow(sdist / sRange, 2);
                 const sGravity = sG / (sdist + 30) * sEdge;
-                vx += (sdx / sdist) * sGravity * dt;
-                vy += (sdy / sdist) * sGravity * dt;
+                vx += (sdx / sdist) * sGravity * dt * gF;
+                vy += (sdy / sdist) * sGravity * dt * gF;
             }
         }
 
