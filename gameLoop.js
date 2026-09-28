@@ -409,33 +409,9 @@ if (ev.type === 'multi') {
     }
 
     _lancerBoule(player) {
-        const state = this.state;
         const B = player._boule;
         player._boule = null;
-        const n = Math.floor(B.n);
-        if (n < 5) return;
-        const src = B.src;
-        const h = src.radius * BOULE_HAUTEUR;
-        const bx = src.x + Math.cos(B.angle) * h, by = src.y + Math.sin(B.angle) * h;
-        const vitesse = (20 + player.stats.velocity * 6) * BOULE_VITESSE;
-        const traj = computeTrajectory(state, bx, by, Math.cos(B.angle), Math.sin(B.angle),
-                                       vitesse, BOULE_PAS, BOULE_GRAVITE);
-        const pl = src.type === 'moon' ? src.parent : src;
-        const groupe = pl ? [pl.name].concat((pl.moons || []).map(m => m.name)) : [src.name];
-        const jet = {
-            id: ++_jetIdCounter, owner: player.id, color: player.color, spores: n,
-            sporeType: 'normal', trajectory: traj, posIndex: 0,
-            x: bx, y: by, speed: vitesse, alive: true, trail: [], age: 0,
-            source: src, sourceName: src.name, _hitBelt: {},
-            boule: true, _groupe: groupe,
-        };
-        state.jets.push(jet);
-        this.io.to(this.roomId).emit('jet_fired', {
-            srcName: src.name, dirX: Math.cos(B.angle), dirY: Math.sin(B.angle),
-            sporeType: 'normal', owner: player.id, slot: player.id,
-            spores: n, color: jet.color, speed: vitesse, id: jet.id,
-            trajectory: traj, boule: true,
-        });
+        lancerBouleServeur(this.state, player, B.src, B.angle, Math.floor(B.n));
     }
 
     _step(dt) {
@@ -453,6 +429,7 @@ if (ev.type === 'multi') {
         this._rafales(dt);
         this._boules(dt);
         if (this._tick % 2 === 0) updateAI(this.state, 50 / 1000);
+        aiArmes(this.state, dt);
 
      // Snapshot toutes les 2 ticks = 100ms
         if (this._tick % 2 === 0) {
@@ -578,10 +555,10 @@ time: state.time,
             a: Math.round((b.rocks[0]?.angle || 0) * 10000) / 10000,
             orbitSpeed: b.orbitSpeed,
         })),
-        boules: state.players.filter(p => p._boule).map(p => ({
-            owner: p.id, src: p._boule.src.name,
-            a: Math.round(p._boule.angle * 1000) / 1000, n: Math.floor(p._boule.n),
-        })),
+        boules: state.players.filter(p => p._boule || p._aiBoule).map(p => {
+            const B = p._boule || p._aiBoule;
+            return { owner: p.id, src: B.src.name, a: Math.round(B.angle * 1000) / 1000, n: Math.floor(B.n) };
+        }),
 players: state.players.map(p => ({
             id:           p.id,
             alive:        p.alive,
@@ -2413,7 +2390,7 @@ function updateAI(state, dt) {
 
         for (const body of player.bodies) {
             if (body.buildMode === 'off' && body.spores > body.maxSpores * 0.7) {
-                body.buildMode = player.bodies.length < 4 ? 'nid' : (state._gameRng() > 0.5 ? 'nid' : 'biome');
+                body.buildMode = aiChoixBatiment(state, player, body);
             }
         }
 
@@ -2434,7 +2411,7 @@ function aiActionEasy(state, player) {
     const targets = state.allBodies.filter(b => b.owner !== player.id && b.type !== 'sun');
     if (!targets.length) return;
     const target  = targets[Math.floor(state._gameRng() * targets.length)];
-    aiLaunchAt(state, source, target, player);
+    aiTirer(state, source, target, player);
 }
 
 function aiActionNormal(state, player) {
@@ -2461,7 +2438,7 @@ function aiActionNormal(state, player) {
         const d  = Math.sqrt(dx * dx + dy * dy);
         if (d < bestDist) { bestDist = d; bestSource = src; }
     }
-    aiLaunchAt(state, bestSource, bestTarget, player);
+    aiTirer(state, bestSource, bestTarget, player);
 }
 
 function aiActionBrutal(state, player) {
@@ -2495,11 +2472,11 @@ function aiActionBrutal(state, player) {
     const count = Math.min(attackSources.length, 1 + Math.floor(state._gameRng() * 3));
     for (let i = 0; i < count; i++) {
         if (attackSources[i].src.spores < 40) continue;
-        aiLaunchAt(state, attackSources[i].src, bestTarget, player);
+        aiTirer(state, attackSources[i].src, bestTarget, player);
     }
 }
 
-function aiLaunchAt(state, source, target, player) {
+function aiLaunchAt(state, source, target, player, sporeType, opts) {
     const dx   = target.x - source.x, dy = target.y - source.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
     const speed      = 20 + player.stats.velocity * 6;
@@ -2528,7 +2505,168 @@ function aiLaunchAt(state, source, target, player) {
     const aimDx = futureX - source.x, aimDy = futureY - source.y;
     const aimLen = Math.sqrt(aimDx * aimDx + aimDy * aimDy);
     if (aimLen < 5) return;
-    launchJet(state, source, aimDx / aimLen, aimDy / aimLen);
+    const n0 = state.jets.length;
+    launchJet(state, source, aimDx / aimLen, aimDy / aimLen, sporeType || 'normal', player.id,
+              undefined, undefined, opts && opts.nombre, opts);
+    /* Annonce aux clients : sans elle, les tirs des IA restaient invisibles
+       en multijoueur (les instantanes ne font que corriger des jets connus). */
+    if (state.jets.length > n0) annoncerJet(state, state.jets[n0], opts && opts.demol ? { demol: opts.demol } : null);
+}
+
+/* Previent les clients d'un jet cree cote serveur, avec sa trajectoire. */
+function annoncerJet(state, jet, extra) {
+    if (!state._io || !state._roomId || !jet) return;
+    const t = jet.trajectory || [];
+    const d = t.length > 1 ? Math.hypot(t[1].x - t[0].x, t[1].y - t[0].y) || 1 : 1;
+    const ev = {
+        srcName: jet.sourceName, sporeType: jet.sporeType || 'normal',
+        dirX: t.length > 1 ? (t[1].x - t[0].x) / d : 1, dirY: t.length > 1 ? (t[1].y - t[0].y) / d : 0,
+        owner: jet.owner, slot: jet.owner, spores: jet.spores, color: jet.color,
+        speed: jet.speed, id: jet.id, trajectory: t,
+    };
+    if (extra) Object.assign(ev, extra);
+    state._io.to(state._roomId).emit('jet_fired', ev);
+}
+
+/* Le jet d'une boule lancee (joueur ou IA), annonce aux clients. */
+function lancerBouleServeur(state, player, src, angle, n) {
+    if (n < 5) return;
+    const h = src.radius * BOULE_HAUTEUR;
+    const bx = src.x + Math.cos(angle) * h, by = src.y + Math.sin(angle) * h;
+    const vitesse = (20 + player.stats.velocity * 6) * BOULE_VITESSE;
+    const traj = computeTrajectory(state, bx, by, Math.cos(angle), Math.sin(angle),
+                                   vitesse, BOULE_PAS, BOULE_GRAVITE);
+    const pl = src.type === 'moon' ? src.parent : src;
+    const groupe = pl ? [pl.name].concat((pl.moons || []).map(m => m.name)) : [src.name];
+    const jet = {
+        id: ++_jetIdCounter, owner: player.id, color: player.color, spores: n,
+        sporeType: 'normal', trajectory: traj, posIndex: 0,
+        x: bx, y: by, speed: vitesse, alive: true, trail: [], age: 0,
+        source: src, sourceName: src.name, _hitBelt: {},
+        boule: true, _groupe: groupe,
+    };
+    state.jets.push(jet);
+    annoncerJet(state, jet, { boule: true });
+}
+
+/* ─────────────────────────────────────────────
+   LES IA SE SERVENT DE TOUT L'ARSENAL (meme logique que le client solo) :
+   les trois batiments et le foyer putride, et en plus du jet normal le
+   parasite, le demolisseur, la boule et la rafale. Gout pour les tirs
+   speciaux selon la difficulte : 15 / 35 / 50 %.
+   ───────────────────────────────────────────── */
+function aiChoixBatiment(state, player, body) {
+    const alea = state._gameRng;
+    if (body.owner === player.id && !body.lutte && (body.parasiteSpore || 0) < 1 && alea() < 0.12
+        && !player.bodies.some(b => b.buildMode === 'parasite' || (b.parasiteSpore || 0) >= 1)) return 'parasite';
+    if (body.lutte && alea() < 0.7) return 'biome';
+    if (body.spores > body.maxSpores * 0.95 && alea() < 0.6) return 'alveole';
+    const r = alea();
+    if (player.bodies.length < 4 || r < 0.45) return 'nid';
+    return r < 0.75 ? 'biome' : 'alveole';
+}
+
+function _aiBatimentsAdverses(state, target, slot) {
+    if (!((target.alveoles || 0) + (target.nids || 0) + (target.biomes || 0))) return null;
+    const n = { alveole: 0, nid: 0, biome: 0 };
+    const monCamp = campDe(target, slot);
+    const cel = target.lutte ? target.lutte.cellules : null;
+    let total = 0;
+    for (const e of edifices(state, target)) {
+        if (cel ? cel[e.i] === monCamp : target.owner === slot) continue;
+        n[e.g]++; total++;
+    }
+    return total ? n : null;
+}
+
+function aiTirer(state, src, target, player) {
+    const alea = state._gameRng;
+    const d = state.config?.difficulty || 'normal';
+    const gout = d === 'easy' ? 0.15 : d === 'normal' ? 0.35 : 0.5;
+    const chezElle = src.owner === player.id;
+    /* Parasite pret ou demolisseur possible : on se choisit un astre ennemi
+       a portee, meme si la cible du moment est un neutre. */
+    const parasitePret = chezElle && (src.parasiteSpore || 0) >= 1;
+    const peutDemolir = !src.lutte && (src.spores || 0) >= DEMOL_SPORES + 100;
+    if ((parasitePret || peutDemolir) && !(target.owner !== null && target.owner !== undefined && target.owner !== player.id)) {
+        let best = null, bd = 3000 * 3000;
+        for (const b of state.allBodies) {
+            if (b.type === 'sun' || b.owner === null || b.owner === undefined || b.owner === player.id) continue;
+            if (!parasitePret && !_aiBatimentsAdverses(state, b, player.id)) continue;
+            const d2 = (b.x - src.x) * (b.x - src.x) + (b.y - src.y) * (b.y - src.y);
+            if (d2 < bd) { bd = d2; best = b; }
+        }
+        if (best && alea() < 0.5) target = best;
+    }
+    const ennemi = target.owner !== null && target.owner !== undefined && target.owner !== player.id;
+    if (ennemi && parasitePret && alea() < 0.7) {
+        aiLaunchAt(state, src, target, player, 'parasite'); return;
+    }
+    if (alea() < gout && !player._aiRafale && !player._aiBoule) {
+        const bats = ennemi ? _aiBatimentsAdverses(state, target, player.id) : null;
+        const dispo = src.lutte ? 0 : (src.spores || 0);
+        if (bats && dispo >= DEMOL_SPORES + 100 && alea() < 0.6) {
+            let g = 'nid';
+            for (const k of ['alveole', 'nid', 'biome']) if (bats[k] > bats[g]) g = k;
+            aiLaunchAt(state, src, target, player, 'normal',
+                       { nombre: DEMOL_SPORES, vitesse: DEMOL_VITESSE, pas: DEMOL_PAS, demol: g });
+            return;
+        }
+        if (chezElle && !src.lutte && dispo >= 400 && alea() < 0.5) {
+            player._aiBoule = { src: src, cible: target, n: 0,
+                                but: Math.min(BOULE_MAX, dispo * 0.4 / BOULE_COUT),
+                                angle: Math.atan2(target.y - src.y, target.x - src.x) };
+            return;
+        }
+        if (dispo >= 150) {
+            player._aiRafale = { src: src, cible: target, acc: 0,
+                                 reste: Math.min(16, Math.floor(dispo * 0.4 / RAFALE_PAQUET)) };
+            return;
+        }
+    }
+    aiLaunchAt(state, src, target, player);
+}
+
+/* Rafales et boules des IA, a chaque pas du serveur. */
+function aiArmes(state, dt) {
+    const alea = state._gameRng || Math.random;
+    for (const player of state.players) {
+        if (player.isHuman) continue;
+        if (!player.alive || state._gameOver) { player._aiRafale = null; player._aiBoule = null; continue; }
+        const R = player._aiRafale;
+        if (R) {
+            if (R.src.owner !== player.id && !(R.src.lutte && zonesDe(R.src, player.id).length)) player._aiRafale = null;
+            else {
+                R.acc += dt;
+                while (R.acc >= 1 / RAFALE_CADENCE && R.reste > 0) {
+                    R.acc -= 1 / RAFALE_CADENCE;
+                    R.reste--;
+                    const a = Math.atan2(R.cible.y - R.src.y, R.cible.x - R.src.x) + (alea() * 2 - 1) * RAFALE_ECART;
+                    const n0 = state.jets.length;
+                    launchJet(state, R.src, Math.cos(a), Math.sin(a), 'normal', player.id, undefined, undefined, RAFALE_PAQUET);
+                    if (state.jets.length > n0) annoncerJet(state, state.jets[n0], { rafale: true });
+                    else { R.reste = 0; break; }
+                }
+                if (R.reste <= 0) player._aiRafale = null;
+            }
+        }
+        const B = player._aiBoule;
+        if (B) {
+            if (B.src.owner !== player.id || B.src.lutte) { player._aiBoule = null; continue; }
+            const cible = Math.atan2(B.cible.y - B.src.y, B.cible.x - B.src.x);
+            let d = cible - B.angle;
+            while (d > Math.PI) d -= 2 * Math.PI;
+            while (d < -Math.PI) d += 2 * Math.PI;
+            const v = BOULE_ROTATION * 3 * dt;
+            B.angle += Math.max(-v, Math.min(v, d));
+            const voulu = Math.min(BOULE_DEBIT * dt, B.but - B.n, (B.src.spores || 0) / BOULE_COUT);
+            if (voulu > 0) { B.src.spores -= voulu * BOULE_COUT; B.n += voulu; }
+            if ((B.n >= B.but - 0.5 || voulu <= 0) && Math.abs(d) < 0.15) {
+                player._aiBoule = null;
+                lancerBouleServeur(state, player, B.src, B.angle, Math.floor(B.n));
+            }
+        }
+    }
 }
 
 // ─── Détection fin de partie (autoritaire serveur) ────────────
