@@ -1375,6 +1375,8 @@ const BOULE_VITESSE = 1.4;
 const BOULE_PAS = Math.round(200 * 2 / BOULE_VITESSE);
 const BOULE_GRAVITE = 0.25;
 const BOULE_HAUTEUR = 1.35;
+const BRULURE_PRES = 2.2, BRULURE_TRES_PRES = 1.5;   /* en rayons d'etoile */
+const BRULURE_LENTE = 1, BRULURE_FORTE = 5;          /* spores par seconde */
 const DEMOL_SPORES = 250;
 const DEMOL_VITESSE = 0.6;
 const DEMOL_PAS = Math.round(200 / DEMOL_VITESSE);   /* meme portee qu'un jet */
@@ -2023,6 +2025,26 @@ function updateJets(state, dt) {
                         tp.x += tx / td * hForce * f * jet.speed * 0.3;
                         tp.y += ty / td * hForce * f * jet.speed * 0.3;
                     }
+                }
+            }
+        }
+
+/* Brulure des etoiles : pres d'une etoile un tir perd 1 spore/s, tres
+   pres 5/s (distances en rayons de l'etoile, depuis son centre). */
+        if (!jet._surface && jet.owner !== -1) {
+            let taux = 0;
+            for (const s of state.suns) {
+                const dx = jet.x - s.x, dy = jet.y - s.y, d2 = dx * dx + dy * dy, r = s.radius;
+                if (d2 < r * r * BRULURE_TRES_PRES * BRULURE_TRES_PRES) { taux = BRULURE_FORTE; break; }
+                if (d2 < r * r * BRULURE_PRES * BRULURE_PRES) taux = Math.max(taux, BRULURE_LENTE);
+            }
+            if (taux) {
+                jet._brule = (jet._brule || 0) + taux * dt;
+                const k = Math.floor(jet._brule);
+                if (k > 0) {
+                    jet._brule -= k;
+                    jet.spores -= k;
+                    if (jet.spores <= 0) { jet.spores = 0; jet.alive = false; continue; }
                 }
             }
         }
