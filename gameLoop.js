@@ -103,6 +103,39 @@ this.io.to(this.roomId).emit('jet_fired', {
             }
         }
 
+/* DEMOLISSEUR (Espace cote client). Un tir de 250 spores exactement, plus
+   lent, qui casse a l'impact un batiment du genre choisi. Le client ne donne
+   que l'astre, la direction et le genre : le nombre, la vitesse et la casse
+   sont decides ici. */
+if (ev.type === 'demolisseur') {
+            if (ev.dirX === undefined || ev.dirY === undefined) return;
+            if (!['alveole', 'nid', 'biome'].includes(ev.genre)) return;
+            const player = state.players.find(p => p.socketId === socketId);
+            if (!player || !player.alive) return;
+            const src = state.planets.find(p => p.name === ev.srcName)
+                     || state.moons.find(m => m.name === ev.srcName);
+            if (!src) return;
+            if (src.owner !== player.id && !(src.lutte && zonesDe(src, player.id).length)) return;
+            let tireur = src;
+            const vis = player._visee;
+            if (vis && vis.lanceur && vis.lanceur.owner === player.id &&
+                _groupeTir(vis.src).indexOf(vis.lanceur) >= 0) {
+                tireur = vis.lanceur;
+            }
+            const prevCount = state.jets.length;
+            launchJet(state, tireur, ev.dirX, ev.dirY, 'normal', player.id, ev.zx, ev.zy, DEMOL_SPORES,
+                      { vitesse: DEMOL_VITESSE, pas: DEMOL_PAS, demol: ev.genre });
+            if (state.jets.length > prevCount) {
+                const jet = state.jets[state.jets.length - 1];
+                this.io.to(this.roomId).emit('jet_fired', {
+                    srcName: tireur.name, dirX: ev.dirX, dirY: ev.dirY, sporeType: 'normal',
+                    owner: player.id, slot: player.id, spores: jet.spores, color: jet.color,
+                    speed: jet.speed, id: jet.id, trajectory: jet.trajectory, demol: ev.genre,
+                });
+            }
+            return;
+        }
+
 /* VISEE. Le chargement se joue pendant que le joueur vise, donc le serveur
    doit savoir ou il vise. Le client envoie sa cible de temps en temps ; c'est
    le serveur qui en deduit l'astre le plus proche et qui deplace les spores.
@@ -1211,6 +1244,26 @@ function poserEdifice(state, body, genre, v) {
     else body.biomes = (body.biomes || 0) + 1;
 }
 
+/* Casse un batiment du genre voulu qui n'est pas au tireur (demolisseur) ;
+   rien s'il n'y en a pas. Les clients suivent par les compteurs. */
+function demolirEdifice(state, body, tireur, genre) {
+    const liste = edifices(state, body);
+    const monCamp = campDe(body, tireur);
+    const cel = body.lutte ? body.lutte.cellules : null;
+    const cibles = [];
+    for (let k = 0; k < liste.length; k++) {
+        if (liste[k].g !== genre) continue;
+        if (cel ? cel[liste[k].i] === monCamp : body.owner === tireur) continue;
+        cibles.push(k);
+    }
+    if (!cibles.length) return null;
+    const alea = state._gameRng || Math.random;
+    const e = liste.splice(cibles[Math.floor(alea() * cibles.length)], 1)[0];
+    const cle = e.g === 'nid' ? 'nids' : e.g === 'alveole' ? 'alveoles' : 'biomes';
+    body[cle] = Math.max(0, (body[cle] || 0) - 1);
+    return e.g;
+}
+
 function nbBatimentCamp(state, body, genre, v) {
     const cle = genre === 'nid' ? 'nids' : genre === 'alveole' ? 'alveoles' : 'biomes';
     if (!body.lutte) return body[cle] || 0;
@@ -1322,6 +1375,9 @@ const BOULE_VITESSE = 1.4;
 const BOULE_PAS = Math.round(200 * 2 / BOULE_VITESSE);
 const BOULE_GRAVITE = 0.25;
 const BOULE_HAUTEUR = 1.35;
+const DEMOL_SPORES = 250;
+const DEMOL_VITESSE = 0.6;
+const DEMOL_PAS = Math.round(200 / DEMOL_VITESSE);   /* meme portee qu'un jet */
 const ZONE_FONTE = 0.5;
 const _zoneMarque = new Int16Array(LUTTE_N * LUTTE_N);
 const _zonePile = [];
@@ -2018,6 +2074,8 @@ function updateJets(state, dt) {
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist < body.radius + 6) {
                 jet.alive = false;
+                /* Le demolisseur casse avant que ses spores n'attaquent. */
+                if (jet.demolisseur) demolirEdifice(state, body, jet.owner, jet.demolisseur);
                 applyConquest(state, body, jet);
                 break;
             }
@@ -2252,7 +2310,7 @@ function majChargementTir(state, dt) {
    tete de pont qu'on tient sur la planete de quelqu'un d'autre. */
 /* nombre, facultatif : un nombre FIXE de spores (paquets de rafale) au lieu
    du pourcentage d'envoi du joueur. */
-function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy, nombre) {
+function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy, nombre, opts) {
     const _nb = nombre > 0 ? Math.floor(nombre) : 0;
     sporeType = sporeType || 'normal';
     const tireur = (slot === undefined || slot === null) ? source.owner : slot;
@@ -2286,8 +2344,12 @@ function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy, nombre) {
         }
     }
 
-    const speed = 20 + player.stats.velocity * 6;
-    const traj  = computeTrajectory(state, source.x, source.y, dirX, dirY, speed);
+    /* opts.vitesse ralentit le jet, opts.pas allonge sa trajectoire d'autant :
+       meme portee (le demolisseur). */
+    const speed = (20 + player.stats.velocity * 6) * (opts && opts.vitesse > 0 ? opts.vitesse : 1);
+    const traj  = opts && opts.pas
+                ? computeTrajectory(state, source.x, source.y, dirX, dirY, speed, opts.pas)
+                : computeTrajectory(state, source.x, source.y, dirX, dirY, speed);
     const jetColor = sporeType === 'parasite' ? '#22C55E' : player.color;
 
     state.jets.push({
@@ -2307,6 +2369,7 @@ function launchJet(state, source, dirX, dirY, sporeType, slot, zx, zy, nombre) {
         source,
         sourceName: source.name,
         _hitBelt:   {},
+        demolisseur: (opts && opts.demol) || false,
     });
 }
 
