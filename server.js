@@ -14,9 +14,22 @@ process.on('unhandledRejection', (e) => console.error('[PROMESSE rejetee]', e &&
 // ── Supabase (service_role, serveur uniquement) ──────────────
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-const supa = (SUPABASE_URL && SUPABASE_SERVICE_KEY)
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { auth: { persistSession: false } })
-    : null;
+/* La creation du client ne doit JAMAIS empecher le serveur de demarrer :
+   sous Node 20 sans WebSocket natif, supabase-js levait une exception au
+   chargement, le serveur s'arretait et le multijoueur entier tombait. On lui
+   fournit donc le WebSocket du paquet ws, et au pire on continue sans base. */
+let supa = null;
+if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+  try {
+    supa = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+      auth: { persistSession: false },
+      realtime: { transport: require('ws') }
+    });
+  } catch (e) {
+    console.error('[SUPABASE] client impossible a creer — ELO desactive :', e && e.message);
+    supa = null;
+  }
+}
 if (supa) console.log('[SUPABASE] client service_role prêt');
 else console.warn('[SUPABASE] SUPABASE_URL ou SUPABASE_SERVICE_KEY manquant — ELO désactivé');
 
